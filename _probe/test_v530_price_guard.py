@@ -215,16 +215,25 @@ check("duplicate shield is still present",
 
 
 # ----------------------------------------------------------------------
-# 4. Retry re-quote - never move a limit onto the wrong side
+# 4. Retry re-quote - never move a pending order onto the wrong side
 # ----------------------------------------------------------------------
 print("\n-- Retry re-quote --")
 
-check("BUY_LIMIT retry re-quotes against the bid",
+# v5.82: the pending entry is a BUY_STOP / SELL_STOP, and a STOP must NEVER be
+# re-priced toward the market. A BUY_STOP dragged down onto the Bid (or a
+# SELL_STOP up onto the Ask) is invalid by definition, and even a legal drag
+# would abandon the breakout-anticipation entry and turn a stop-style fill back
+# into a pullback fill. The stop resends its geometric price unchanged; the
+# virtual fallback covers a venue that keeps refusing it.
+check("no pending order type is re-priced on retry",
+      re.search(r"ORDER_TYPE_(BUY|SELL)_(LIMIT|STOP)\)\s*\n\s*request\.price\s*=",
+                SEND) is None)
+check("BUY_LIMIT retry re-quote against the bid is retired",
       re.search(r"ORDER_TYPE_BUY_LIMIT\)\s*\n\s*request\.price\s*=\s*"
-                r"SnapToTick\(GetBid\(\)\)", SEND) is not None)
-check("SELL_LIMIT retry re-quotes against the ask",
+                r"SnapToTick\(GetBid\(\)\)", SEND) is None)
+check("SELL_LIMIT retry re-quote against the ask is retired",
       re.search(r"ORDER_TYPE_SELL_LIMIT\)\s*\n\s*request\.price\s*=\s*"
-                r"SnapToTick\(GetAsk\(\)\)", SEND) is not None)
+                r"SnapToTick\(GetAsk\(\)\)", SEND) is None)
 check("market BUY still prices at the ask",
       re.search(r"ORDER_TYPE_BUY\)\s*\n\s*request\.price\s*=\s*GetAsk\(\)",
                 SEND) is not None)
@@ -238,6 +247,41 @@ check("the invalid BUY_LIMIT-as-Ask retry is gone",
       not in SEND)
 check("retry path does not scale the stop-loss price",
       "request.sl" not in SEND)
+
+
+# ----------------------------------------------------------------------
+# 4b. v5.82 BREAKOUT ANTICIPATION - STOP entry, stop-side price guard
+# ----------------------------------------------------------------------
+print("\n-- v5.82 stop-style entry --")
+
+# The router must never emit a *_LIMIT for a pending entry: the anticipation
+# entry rests 0.5*ATR BEYOND the far edge, which is above market for a LONG and
+# below it for a SHORT. Only a STOP can legally rest there and only a STOP is
+# reached by price moving IN the breakout direction.
+check("GetOrderTypeForBlock emits BUY_STOP for a LONG",
+      re.search(r"DIR_LONG\)\s*\?\s*ORDER_TYPE_BUY_STOP", OM_T) is not None)
+check("GetOrderTypeForBlock emits SELL_STOP for a SHORT",
+      re.search(r":\s*ORDER_TYPE_SELL_STOP\s*;", OM_T) is not None)
+otf_start = OM_T.find("GetOrderTypeForBlock(const SSniperBlock &block)")
+otf_end = OM_T.find("GetDirectionForBlock(const SSniperBlock &block)")
+otf = OM_T[otf_start:otf_end] if otf_start >= 0 and otf_end > otf_start else ""
+otf_code = "\n".join(l for l in otf.splitlines()
+                     if not l.strip().startswith("//"))
+check("GetOrderTypeForBlock body has no *_LIMIT left",
+      "_LIMIT" not in otf_code)
+
+# priceValid must carry STOP polarity and be measured against the executable
+# side of each stop's trigger: the Ask for a buy, the Bid for a sell.
+check("priceValid requires a LONG stop to rest ABOVE the ask",
+      re.search(r"priceValid\s*=\s*\(entryPrice\s*>\s*GetAsk\(\)\s*\+\s*boundary\)",
+                OM_T) is not None)
+check("priceValid requires a SHORT stop to rest BELOW the bid",
+      re.search(r"priceValid\s*=\s*\(entryPrice\s*<\s*GetBid\(\)\s*-\s*boundary\)",
+                OM_T) is not None)
+check("the old limit-polarity priceValid is retired",
+      re.search(r"priceValid\s*=\s*\(entryPrice\s*<\s*GetBid\(\)\s*-\s*boundary\)\s*;\s*\n"
+                r"\s*else\s*\n\s*priceValid\s*=\s*\(entryPrice\s*>\s*GetAsk\(\)",
+                OM_T) is None)
 
 
 # ----------------------------------------------------------------------

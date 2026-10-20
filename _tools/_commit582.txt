@@ -1,0 +1,210 @@
+582: fix -- the physical route rests a BUY_STOP/SELL_STOP, not a pullback-fill limit
+
+RATIONALE
+
+  The requested entry geometry -- "breakout anticipation": entry BEYOND the far
+  S/R edge, SL on the OPPOSITE edge, market-on-cross trigger -- was already the
+  geometry this tree computes. Verified line by line, not assumed:
+
+    COttoBlockManager.mqh  BlockEntryPrice()          LONG -> b.bottom + slDist
+                                                      SHORT -> b.top    - slDist
+    COttoOrderManager.mqh  CalcEntryPrice()           same mapping
+    COttoOrderManager.mqh  CalcSLDistance()           blockHeight + 0.5*ATR
+    COttoOrderManager.mqh  stopLoss                   entry -/+ slDist (opposite edge)
+    COttoOrderManager.mqh  CheckVirtualTriggers()     ask < trigger (LONG) /
+                                                      bid > trigger (SHORT) -> MARKET deal
+
+  With slDist = blockHeight + 0.5*ATR those collapse to LONG entry = b.top +
+  0.5*ATR and SHORT entry = b.bottom - 0.5*ATR: 0.5*ATR BEYOND the far edge,
+  with the SL a full slDist back on the opposite edge. The trigger is a genuine
+  CROSS (price must RISE into a LONG, FALL into a SHORT) and the fill is a
+  trade action DEAL, so it is already market-on-cross and not a resting touch.
+
+  So no arithmetic was rewritten. The defect was in the OTHER route.
+
+THE DEFECT
+
+  PlaceOrArmOrder() is a hybrid router. CheckVirtualTriggers() (the virtual arm)
+  was already correct. The PHYSICAL branch was not, and it contradicted itself:
+
+    COttoOrderManager.mqh  GetOrderTypeForBlock()  -> ORDER_TYPE_BUY_LIMIT /
+                                                      ORDER_TYPE_SELL_LIMIT
+    COttoOrderManager.mqh  priceValid (LONG)       -> entryPrice < GetBid() - boundary
+
+  For a LONG the entry is b.top + 0.5*ATR, i.e. ABOVE the market. That is never
+  a legal BUY_LIMIT, and `entryPrice < Bid` is FALSE on a fresh setup -- so a
+  clean setup could not rest physically at all. The test flipped TRUE only once
+  price had already run THROUGH the far edge by more than the boundary, and in
+  exactly that state a BUY_LIMIT rests BELOW market and fills on a PULLBACK back
+  into the zone.
+
+  That is the reversion/pullback trap the anticipation model exists to replace,
+  with no breakout confirmation anywhere in the path. The SL was still one
+  slDist away, so the R:R arithmetic looked intact and the defect was invisible
+  in the risk numbers -- only the ENTRY SEMANTICS were inverted: to get filled
+  the market had to move AGAINST the breakout. The in-tree comment already
+  described the intended behaviour ("a buy-stop above resistance"), so the route
+  contradicted its own documentation.
+SOURCE
+
+  COttoOrderManager.mqh -- GetOrderTypeForBlock(), 2 lines
+    The producer, and the whole behavioural fix:
+
+      - return (GetDirectionForBlock(block) == DIR_LONG) ? ORDER_TYPE_BUY_LIMIT
+      -                                                  : ORDER_TYPE_SELL_LIMIT;
+      + return (GetDirectionForBlock(block) == DIR_LONG) ? ORDER_TYPE_BUY_STOP
+      +                                                  : ORDER_TYPE_SELL_STOP;
+
+    A STOP can legally rest 0.5*ATR beyond the far edge, and only a STOP is
+    reached by price moving IN the breakout direction. Both routes now carry
+    identical trigger semantics: price must CROSS the level to fire.
+
+  COttoOrderManager.mqh -- priceValid, 2 comparisons inverted
+    Must mirror the type above, and be measured against the side each stop
+    triggers on (Ask for a buy, Bid for a sell):
+
+      - if(isLong) priceValid = (entryPrice < GetBid() - boundary);
+      - else       priceValid = (entryPrice > GetAsk() + boundary);
+      + if(isLong) priceValid = (entryPrice > GetAsk() + boundary);
+      + else       priceValid = (entryPrice < GetBid() - boundary);
+
+    Now the physical rest can ONLY happen while the entry is still AHEAD of
+    price, which is precisely the state a stop needs. A setup whose entry has
+    already been reached falls through to the virtual arm and fires as a MARKET
+    deal on the cross -- the same economics, strictly more likely to fill.
+
+  COttoOrderManager.mqh -- SendOrderWithRetry(), re-quote branches REMOVED
+    The BUY_LIMIT -> SnapToTick(GetBid()) / SELL_LIMIT -> SnapToTick(GetAsk())
+    retry arms were both dead (no pending caller sends a limit now) and wrong:
+    dragging a BUY_STOP DOWN onto the Bid is the exact mirror of the v5.30
+    [Invalid price] bug this block was written to fix. A stop now resends its
+    geometric entry verbatim, and if the venue keeps refusing it the caller's
+    virtual fallback arms the setup. Only true MARKET orders are re-priced to the
+    executable side -- that logic is untouched.
+
+    Deliberately NOT replaced with a stop-side re-quote: a legal re-quote would
+    still silently relocate the entry away from the far-edge geometry the setup
+    was armed at, converting a stop-style fill back into a pullback fill. The
+    entry price is a strategy invariant here, not a fallback to be negotiated.
+
+COMMENTS ONLY (no behaviour; kept truthful so the next reader is not misled)
+
+  COttoOrderManager.mqh -- SVirtualOrder header: v5.52's "the virtual engine is
+  the ORDINARY path, a broker limit cannot legitimately rest" is now inverted by
+  this release; reworded to "v5.52 made it ordinary because a broker LIMIT cannot
+  rest there; v5.82 emits a broker STOP, so the virtual arm is the FALLBACK".
+  GetPriceBoundaryBuffer() box border: "pending limit" -> "pending order" (border
+  re-padded to 73 columns, alignment verified).
+  HYBRID ROUTER header: LIMIT wording replaced with STOP semantics, the stale
+  "the limit test below is FALSE so the setup arms VIRTUALLY" claim replaced with
+  the stop truth (test is TRUE; physical rest is the ordinary path, virtual the
+  fallback), and the old paragraph retained as an attributed pre-v5.82 note.
+  ROUTE A banner: "resting broker limit" -> "resting broker stop".
+  Log string: "PHYSICAL LIMIT PLACED" -> "PHYSICAL STOP PLACED". No probe or
+  module reads this literal (grepped repo-wide before the change).
+
+  NOT changed, because they already handle all four pending types:
+    COttoOrderManager.mqh:3127-3128 and :3214-3215  (BUY_LIMIT||BUY_STOP ->
+    DIR_LONG, SELL_LIMIT||SELL_STOP -> DIR_SHORT) -- CheckPendingOrderFills() and
+    the invalid-block cleanup need no edit. COttoCorrelationFilter.mqh:187-188 and
+    _probe/test_v526_vector.py:195 likewise.
+
+DEFECT CLASS CLOSED
+
+  The same polarity bug existed in two places and only one was ever fixed. v5.30
+  corrected "never move a LIMIT onto the wrong side of the market" in the RETRY
+  path; the ROUTE DECISION itself still assumed limit semantics. This release
+  fixes the decision, which is the one that determines whether a trade is a
+  breakout or a fade.
+
+
+PROBES
+
+  _probe/test_v530_price_guard.py       51 / 51  (was 44 / 44)
+    The only probe asserting the retired limit re-quote. Seven checks added,
+    four re-pointed:
+
+    * section 4 retitled "never move a pending order onto the wrong side". The
+      two BUY_LIMIT->bid / SELL_LIMIT->ask assertions are INVERTED into
+      retirement pins (SnapToTick(GetBid()) now must NOT follow a *_LIMIT/_STOP
+      type), plus a new umbrella assertion that NO pending type is re-priced.
+      The two market-order re-quote pins are unchanged.
+    * NEW section 4b "v5.82 stop-style entry": GetOrderTypeForBlock must emit
+      BUY_STOP for LONG and SELL_STOP for SHORT; its COMMENT-STRIPPED body must
+      contain no "_LIMIT" at all (so prose about the old defect can neither
+      satisfy nor break it); priceValid must read
+      `entryPrice > GetAsk() + boundary` for LONG and
+      `entryPrice < GetBid() - boundary` for SHORT; and the old two-line
+      limit-polarity form is asserted GONE as an ordered pair.
+
+  _probe/test_v557_frontrun.py          93 / 93   (unchanged, re-run: the
+    two-twin entry/SL/TP canon is untouched by this release and stays identical)
+  _probe/test_v540_hybrid.py            41 / 41   (unchanged, re-run: the router
+    still calls GetOrderTypeForBlock(block); the type constant changed, the
+    structure did not)
+
+GATES
+
+  * build_check.ps1 -NoDeploy : 0 errors / 0 warnings, GATE PASSED, 10 modules
+    [STAGED] and headers hash-verified from the staging tree. Run twice: once
+    after the logic change at v5.62, once after the bump at v5.82. Both 0/0.
+  * Census 23 GREEN / 4 RED across 27 probes -- identical to the a5be090
+    baseline. The four reds were PROVEN pre-existing rather than assumed: the
+    work was git-stashed and the same four were run against clean HEAD, giving
+    the same failure counts (test_v528_hotfix 11 fails, test_v531_smart_trim 23,
+    test_v532_hightable 10, test_v543_session 2 = 46 total). All 46 concern DST
+    helpers, WalkTrimLegs/TrimHeavyLosers, FloatingLossPct and session save
+    sites -- none reads a path edited here.
+  * scan_encoding.ps1 : all 11 sources bom=none, validUTF8=True, bareLF=0.
+    COttoOrderManager.mqh non-ASCII 210 (unchanged by this commit).
+  * normalize_eol.py . --check : files=11 rewritten=0, strict CRLF preserved.
+  * _vercensus.py : all 11 #property stamps = 5.82, plus the otto.mq5 banner /
+    startup Print, the OttoDefines banner / description and the four versioned
+    input-group labels, and README "Current base". 20 rows.
+
+VERSION 5.62 -> 5.82 (_tools/_bump_version.py 5.82)
+
+  20 human-facing rows rewritten by the tool. The bump was applied AFTER the
+  logic change so the release lands as one coherent commit.
+
+  The tool exits 1 on its post-bump staleness census, naming four surviving
+  "5.62" literals. All four are CORRECT and were reviewed individually, not
+  waived:
+
+    otto.mq5:12        #property link .../OTTO-v5.62
+                       This is the REPOSITORY name, and `git remote -v` confirms
+                       origin is .../OTTO-v5.62.git. Pointing it at a 5.82 repo
+                       that does not exist would be a dead link. Unchanged.
+    COttoTradeManager.mqh:222, :475, :572
+                       Historical "until v5.62 the trail activation..." notes.
+                       The census only exempts lines carrying the `FIX (` marker,
+                       so plain-historical prose is reported. Rewriting them to
+                       5.82 would make them state something FALSE -- those
+                       changes really did land in v5.62. Unchanged.
+
+NOT PROVEN HERE
+
+  Runtime behaviour. Every probe above is a static source assertion; no Strategy
+  Tester run accompanies this commit. Specifically unverified on a live feed:
+  that a broker accepts a BUY_STOP 0.5*ATR beyond the far edge (venue
+  STOPS_LEVEL permitting), and that the fallback fires as intended when it does
+  not. The claim that the physical route can no longer produce a pullback fill
+  rests on the polarity inversion read line by line, not on an observed fill.
+
+KNOWN, DELIBERATELY NOT ADDRESSED
+
+  AdjustSLToMinimum() still widens the stop to the broker's minimum distance when
+  STOPS_LEVEL/FREEZE_LEVEL exceeds slDist, which on a very tight zone can exceed
+  the 1R budget this geometry specifies. Pre-existing, unrelated to the limit/stop
+  polarity, and left alone: silently clamping would push the SL INSIDE the broker
+  minimum and trade a rejection for an invalid stop. Rejecting the setup instead
+  is a strategy decision, not part of this fix.
+
+ROLLBACK
+
+  pre-commit : git checkout -- COttoOrderManager.mqh
+                              _probe/test_v530_price_guard.py
+                              _tools/_commit582.txt
+                              and the 20 version rows (git checkout -- .)
+  post-commit: git reset --soft HEAD~1
+

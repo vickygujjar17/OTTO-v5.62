@@ -4,7 +4,7 @@
 //|              OTTO EA — exact Pine v4.70 execution port           |
 //+------------------------------------------------------------------+
 #property copyright "OTTO EA - Goat Funded Trader (GFT) Master Build"
-#property version   "5.62"
+#property version   "5.82"
 
 #ifndef __OTTO_ORDER_MANAGER__
 #define __OTTO_ORDER_MANAGER__
@@ -61,8 +61,11 @@ private:
    // --- Virtual Order Engine (v5.37 Part 1) ---------------------------
    // Armed setups are held in memory and executed as MARKET orders when price
    // crosses the continuation level, bypassing broker pending-price rules.
-   // v5.52 makes this the ORDINARY path: the FRONT-EDGE continuation entry is
-   // a breakout (STOP-style), which a broker limit cannot legitimately rest.
+   // v5.52 made this the ORDINARY path because the FRONT-EDGE continuation
+   // entry is a breakout (STOP-style), which a broker LIMIT cannot legitimately
+   // rest. v5.82 completed that reasoning by emitting a broker STOP for the
+   // physical route too, so the virtual arm is now the FALLBACK (venue refuses
+   // the stop distance) rather than the only valid form.
    struct SVirtualOrder
      {
       int                  blockIndex;
@@ -186,7 +189,7 @@ private:
    //+------------------------------------------------------------------+
    //| v5.30 — pre-flight price helpers                                 |
    //|                                                                  |
-   //| GetPriceBoundaryBuffer: the minimum distance a pending limit     |
+   //| GetPriceBoundaryBuffer: the minimum distance a pending order     |
    //| must keep from the live market price. STOPS_LEVEL and            |
    //| FREEZE_LEVEL are both honoured (brokers publish one, the other   |
    //| or both), plus one point of cushion: a price resting exactly on  |
@@ -419,19 +422,28 @@ private:
                result.retcode == TRADE_RETCODE_PRICE_CHANGED ||
                result.retcode == TRADE_RETCODE_PRICE_OFF)
               {
-               // v5.30 — never move a LIMIT onto the wrong side of the
-               // market. Re-pricing a BUY_LIMIT onto the live Ask is invalid
-               // by definition (a BUY LIMIT must rest BELOW the market), and
-               // it was the dominant source of the repeated [Invalid price]
-               // journal errors: every retry re-sent the bad price, up to
-               // MaxRetries attempts per block. A limit is re-quoted against
-               // the side it must legally rest on; only a true market order
-               // is re-priced to the executable side.
-               if(request.type == ORDER_TYPE_BUY_LIMIT)
-                  request.price = SnapToTick(GetBid());
-               else if(request.type == ORDER_TYPE_SELL_LIMIT)
-                  request.price = SnapToTick(GetAsk());
-               else if(request.type == ORDER_TYPE_BUY)
+               // v5.30 — never move a pending order onto the wrong side of
+               // the market. Re-pricing a BUY_LIMIT onto the live Ask is
+               // invalid by definition (a BUY LIMIT must rest BELOW the
+               // market) and was the dominant source of the repeated
+               // [Invalid price] journal errors: every retry re-sent the bad
+               // price, up to MaxRetries attempts per block.
+               //
+               // v5.82 -- STOPS ARE NEVER RE-PRICED. The pending entry is now
+               // a BUY_STOP / SELL_STOP sitting 0.5*ATR beyond the far edge,
+               // and moving a STOP toward the market has the mirror-image
+               // defect of the old limit bug: a BUY_STOP dragged DOWN onto the
+               // Bid (or a SELL_STOP up onto the Ask) is invalid, and even a
+               // legal drag would silently abandon the breakout-anticipation
+               // entry the setup was armed at, converting a stop-style fill
+               // back into a pullback fill. The stop therefore resends the
+               // SAME geometric entry; if the venue keeps refusing it the
+               // caller's virtual fallback arms the setup and
+               // CheckVirtualTriggers() fires it as a MARKET deal on the cross,
+               // which is strictly more likely to trade and preserves the
+               // strategy. Only true MARKET orders are re-priced to the
+               // executable side.
+               if(request.type == ORDER_TYPE_BUY)
                   request.price = GetAsk();
                else if(request.type == ORDER_TYPE_SELL)
                   request.price = GetBid();
@@ -502,10 +514,30 @@ private:
    ENUM_ORDER_TYPE         GetOrderTypeForBlock(const SSniperBlock &block)
      {
       // The order type must FOLLOW the mapped direction, not the zone.
-      // Deriving it independently from block.type would emit a BUY_LIMIT
+      // Deriving it independently from block.type would emit a BUY order
       // while the direction said SHORT. Kept coherent here for every caller.
-      return (GetDirectionForBlock(block) == DIR_LONG) ? ORDER_TYPE_BUY_LIMIT
-                                                       : ORDER_TYPE_SELL_LIMIT;
+      //
+      // v5.82 -- BREAKOUT ANTICIPATION: STOP, never LIMIT. The anticipation
+      // entry sits 0.5*ATR BEYOND the far edge the breakout crosses, i.e.
+      // ABOVE the market for a LONG (Resistance) and BELOW it for a SHORT
+      // (Support). That price can only be expressed as a resting pending
+      // order by a BUY_STOP / SELL_STOP: it must be reached by price moving
+      // IN the breakout direction.
+      //
+      // A *_LIMIT was wrong here in two different ways at once:
+      //   * geometrically, an entry above market is never a legal BUY_LIMIT,
+      //     so a fresh setup could not rest at all; and
+      //   * behaviourally, the only state in which the old `priceValid` test
+      //     admitted the entry was after price had already traded THROUGH
+      //     the level by more than the boundary, where a BUY_LIMIT then
+      //     rests BELOW market and fills on a PULLBACK back into the zone.
+      //     That is the reversion/pullback trap the anticipation model
+      //     exists to replace, and it had no breakout confirmation.
+      // The STOP form makes both routes (physical rest and the virtual
+      // arm fired by CheckVirtualTriggers) stop-style and identical in
+      // trigger semantics: price must CROSS the level to fire.
+      return (GetDirectionForBlock(block) == DIR_LONG) ? ORDER_TYPE_BUY_STOP
+                                                       : ORDER_TYPE_SELL_STOP;
      }
    ENUM_TRADE_DIRECTION    GetDirectionForBlock(const SSniperBlock &block)
      {
@@ -864,12 +896,14 @@ private:
       // HYBRID ROUTER (v5.40)
       // ------------------------------------------------------------------
       // Decide ONCE, before any side effect, whether the entry can legally
-      // REST at the broker. A BUY_LIMIT must sit BELOW the market (ask) and a
-      // SELL_LIMIT ABOVE it (bid), each clearing the broker's stops/freeze
-      // boundary. When the price is still valid we send a real pending order
-      // (broker-side resting fill). When price has already reached/through the
-      // zone the resting form is illegal, so we ARM an in-memory virtual order
-      // and let CheckVirtualTriggers() fire it as a MARKET deal on the cross.
+      // REST at the broker. Since v5.82 the resting form is a BUY_STOP /
+      // SELL_STOP, so "valid" means the entry still sits BEYOND the market in
+      // the breakout direction -- above the Ask for a LONG, below the Bid for a
+      // SHORT -- clearing the broker's stops/freeze boundary. When that holds
+      // we send a real pending stop (broker-side resting fill). When price has
+      // already reached or passed the entry the stop would trigger instantly
+      // or be refused, so we ARM an in-memory virtual order and let
+      // CheckVirtualTriggers() fire it as a MARKET deal on the cross.
       //
       // FRONT-RUNNING ANTICIPATION NOTE. FIX (v5.57). With InpEntryStyle =
       // ENTRY_FRONT_EDGE the entry sits 0.5*ATR beyond the FAR edge -- a
@@ -878,17 +912,38 @@ private:
       // (breakout): the market must still RISE to a LONG entry and FALL to a
       // SHORT entry, while the SL sits a full slDist back on the opposite
       // edge. At arm time price has closed clear of the NEAR edge, i.e. it is
-      // still short of the entry, so the limit test below is FALSE: the setup
-      // arms VIRTUALLY and CheckVirtualTriggers() fires a MARKET deal on the
-      // cross. That inverted cross is the ordinary path, not a fallback; a
-      // physical rest is only ever used when a stale armed price happens to
-      // sit on the limit side of a moved market.
+      // still short of the entry, so the stop test below is TRUE. The setup
+      // then rests physically at the broker as a stop, and the virtual arm
+      // remains the fallback for a venue that refuses the distance. Both
+      // routes are stop-style and fire only ON the cross, never on a pullback
+      // into the zone.
+      //
+      // (Pre-v5.82 this comment justified a *_LIMIT here and asserted the
+      // physical rest was only reachable from a stale armed price on the
+      // "limit side of a moved market" -- i.e. after price had already run
+      // through the level. Under STOP semantics that state is the NORMAL one,
+      // and the old limit polarity is exactly what the v5.82 fix removes.)
+      //
+      // v5.82 -- STOP-SIDE POLARITY. `priceValid` answers "may this entry
+      // legally REST at the broker?", so it must mirror the pending TYPE the
+      // physical route will send (GetOrderTypeForBlock -> BUY_STOP/SELL_STOP).
+      // A BUY_STOP must rest ABOVE the market and a SELL_STOP BELOW it, so the
+      // tolerance is measured against the executable side of the spread: the
+      // Ask for the buy (it triggers on the Ask) and the Bid for the sell.
+      //
+      // The pre-v5.82 test was the LIMIT polarity (LONG valid only when the
+      // entry sat BELOW the Bid) and was therefore inverted for an
+      // anticipation entry: the only tick on which it passed for a LONG was
+      // one where price had already run clear through the far edge, which is
+      // precisely when the old BUY_LIMIT below market degenerated into a
+      // pullback fill. Inverted here so the physical rest and the virtual
+      // arm agree that the entry is still AHEAD of price.
       double boundary = GetPriceBoundaryBuffer();
       bool   priceValid;
       if(isLong)
-         priceValid = (entryPrice < GetBid() - boundary);
-      else
          priceValid = (entryPrice > GetAsk() + boundary);
+      else
+         priceValid = (entryPrice < GetBid() - boundary);
 
       // HARD ANTI-DUPLICATE: reject (latched) if an order — physical OR virtual
       // — already sits at (near) this price. Closes the OnTick race and any
@@ -903,7 +958,7 @@ private:
          return false;
         }
 
-      // ---- ROUTE A: PHYSICAL — price valid, send a resting broker limit ---
+      // ---- ROUTE A: PHYSICAL -- price valid, send a resting broker stop ----
       if(priceValid)
         {
          MqlTradeRequest request;
@@ -964,7 +1019,7 @@ private:
                if(prevSession != "") m_journal.SetSessionID(prevSession);
               }
             if(EnableLogging)
-               Print("[OrderManager] PHYSICAL LIMIT PLACED: ", block.tradeId,
+               Print("[OrderManager] PHYSICAL STOP PLACED: ", block.tradeId,
                      " ticket=", result.order,
                      " entry=", DoubleToString(entryPrice, _Digits),
                      " sl=", DoubleToString(adjustedSL, _Digits),
