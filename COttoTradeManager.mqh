@@ -4,7 +4,7 @@
 //|            OTTO EA - Cut / Cost-BE / ATR Trail / Pyramiding       |
 //+------------------------------------------------------------------+
 #property copyright "OTTO EA - Goat Funded Trader (GFT) Master Build"
-#property version   "5.65"
+#property version   "5.66"
 
 #ifndef __OTTO_TRADE_MANAGER__
 #define __OTTO_TRADE_MANAGER__
@@ -203,8 +203,8 @@ public:
 
       double atr = GetCurrentATR();
       if(atr <= 0) return;
-      double high0 = iHigh(m_symbol, PERIOD_CURRENT, 0);
-      double low0  = iLow(m_symbol, PERIOD_CURRENT, 0);
+      double high0 = iHigh(m_symbol, InpPrimaryTF, 0);
+      double low0  = iLow(m_symbol, InpPrimaryTF, 0);
       // LIVE prices every tick (fixes the +1.0R pyramid trigger): LONG=BID, SHORT=ASK
       double liveBid = SymbolInfoDouble(m_symbol, SYMBOL_BID);
       double liveAsk = SymbolInfoDouble(m_symbol, SYMBOL_ASK);

@@ -4,7 +4,7 @@
 //|              OTTO EA — exact ta.pivothigh/pivotlow port           |
 //+------------------------------------------------------------------+
 #property copyright "OTTO EA - Goat Funded Trader (GFT) Master Build"
-#property version   "5.65"
+#property version   "5.66"
 
 #ifndef __OTTO_MARKET_STRUCTURE__
 #define __OTTO_MARKET_STRUCTURE__
@@ -35,11 +35,11 @@ private:
    //+------------------------------------------------------------------+
    bool              IsFractalHigh(int s, int leftBars, int rightBars)
      {
-      double center = iHigh(m_symbol, PERIOD_CURRENT, s);
+      double center = iHigh(m_symbol, InpPrimaryTF, s);
 
       // Left side (older bars, larger shift) — all strictly lower
       for(int i = 1; i <= leftBars; i++)
-         if(iHigh(m_symbol, PERIOD_CURRENT, s + i) >= center)
+         if(iHigh(m_symbol, InpPrimaryTF, s + i) >= center)
             return false;
 
       // Right side (newer bars, smaller shift) — all strictly lower
@@ -47,7 +47,7 @@ private:
         {
          int check = s - i;
          if(check < 0) return false;
-         if(iHigh(m_symbol, PERIOD_CURRENT, check) >= center)
+         if(iHigh(m_symbol, InpPrimaryTF, check) >= center)
             return false;
         }
       return true;
@@ -59,17 +59,17 @@ private:
    //+------------------------------------------------------------------+
    bool              IsFractalLow(int s, int leftBars, int rightBars)
      {
-      double center = iLow(m_symbol, PERIOD_CURRENT, s);
+      double center = iLow(m_symbol, InpPrimaryTF, s);
 
       for(int i = 1; i <= leftBars; i++)
-         if(iLow(m_symbol, PERIOD_CURRENT, s + i) <= center)
+         if(iLow(m_symbol, InpPrimaryTF, s + i) <= center)
             return false;
 
       for(int i = 1; i <= rightBars; i++)
         {
          int check = s - i;
          if(check < 0) return false;
-         if(iLow(m_symbol, PERIOD_CURRENT, check) <= center)
+         if(iLow(m_symbol, InpPrimaryTF, check) <= center)
             return false;
         }
       return true;
@@ -130,11 +130,11 @@ public:
    //+------------------------------------------------------------------+
    void              GetCandleInfo(int shift, int marketDay, SFractalPeak &out)
      {
-      out.time        = iTime(m_symbol, PERIOD_CURRENT, shift);
-      out.openPrice   = iOpen(m_symbol, PERIOD_CURRENT, shift);
-      out.closePrice  = iClose(m_symbol, PERIOD_CURRENT, shift);
-      out.highPrice   = iHigh(m_symbol, PERIOD_CURRENT, shift);
-      out.lowPrice    = iLow(m_symbol, PERIOD_CURRENT, shift);
+      out.time        = iTime(m_symbol, InpPrimaryTF, shift);
+      out.openPrice   = iOpen(m_symbol, InpPrimaryTF, shift);
+      out.closePrice  = iClose(m_symbol, InpPrimaryTF, shift);
+      out.highPrice   = iHigh(m_symbol, InpPrimaryTF, shift);
+      out.lowPrice    = iLow(m_symbol, InpPrimaryTF, shift);
       out.marketDay   = marketDay;
       out.price       = out.highPrice; // default: high (resistance usage)
      }

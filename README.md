@@ -1,7 +1,13 @@
 # OTTO EA
 
 MetaTrader 5 Expert Advisor — MQL5 port of the Pine Script `prop_guard_tester.pine`
-master build. **Current base: v5.65**
+master build. **Current base: v5.66**
+
+> **Primary timeframe: `PERIOD_M15`** (`InpPrimaryTF`). Pivot detection,
+> block formation and the ATR handle all read the primary TF, so the EA is
+> chart-independent: attach it to any chart and structure is still computed
+> on M15. Bar-count inputs (`MaxBlockDistance`, `LookbackBars`) are counted
+> in primary-TF bars, so they rebase when the TF changes.
 
 ## Layout
 

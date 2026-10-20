@@ -4,7 +4,7 @@
 //|              OTTO EA — exact Pine v4.70 block logic port          |
 //+------------------------------------------------------------------+
 #property copyright "OTTO EA - Goat Funded Trader (GFT) Master Build"
-#property version   "5.65"
+#property version   "5.66"
 
 #ifndef __OTTO_BLOCK_MANAGER__
 #define __OTTO_BLOCK_MANAGER__
@@ -201,7 +201,7 @@ private:
       if(index < 0 || index >= m_blockCount) return;
       m_blocks[index].isVetoed   = true;
       m_blocks[index].vetoReason = reason;
-      m_blocks[index].deleteOnBarTime = iTime(m_symbol, PERIOD_CURRENT, 0);
+      m_blocks[index].deleteOnBarTime = iTime(m_symbol, InpPrimaryTF, 0);
       if(m_blocks[index].limitOrderTicket > 0)
          m_blocks[index].pendingOrderCancel = true;
       m_blocksVetoed++;
@@ -304,13 +304,13 @@ private:
       // ============ RESISTANCE (pivot high) ============
       if(m_marketStruct != NULL && m_marketStruct.IsPivotHigh(pivotShift))
         {
-         double curTop = iHigh(m_symbol, PERIOD_CURRENT, pivotShift);
-         double curBot = MathMax(iOpen(m_symbol, PERIOD_CURRENT, pivotShift),
-                                 iClose(m_symbol, PERIOD_CURRENT, pivotShift));
+         double curTop = iHigh(m_symbol, InpPrimaryTF, pivotShift);
+         double curBot = MathMax(iOpen(m_symbol, InpPrimaryTF, pivotShift),
+                                 iClose(m_symbol, InpPrimaryTF, pivotShift));
 
          if(m_w1ResTime != 0)   // a previous W1 exists
            {
-            int w1Shift = iBarShift(m_symbol, PERIOD_CURRENT, m_w1ResTime);
+            int w1Shift = iBarShift(m_symbol, InpPrimaryTF, m_w1ResTime);
             int dist    = w1Shift - pivotShift;   // = Pine "dist"
 
             if(dist >= MinBlockDistance && dist <= MaxBlockDistance)
@@ -331,7 +331,7 @@ private:
                   nb.midpoint     = (zoneTop + zoneBot) / 2.0;
                   nb.atrSnapshot  = GetATRAtShift(pivotShift);
                   nb.wick1Time    = m_w1ResTime;
-                  nb.wick2Time    = iTime(m_symbol, PERIOD_CURRENT, pivotShift);
+                  nb.wick2Time    = iTime(m_symbol, InpPrimaryTF, pivotShift);
                   // FIX (v5.58) W1/W2 FULL candle geometry, for the journal's
                   // Wick H/L lines only (no trading path reads these fields).
                   // W1: the stored m_w1ResTop IS the W1 candle high (it is the
@@ -340,12 +340,12 @@ private:
                   // the series. W2 is the pivot bar: curTop is its iHigh().
                   nb.wick1.time       = m_w1ResTime;
                   nb.wick1.highPrice  = m_w1ResTop;
-                  nb.wick1.lowPrice   = iLow(m_symbol, PERIOD_CURRENT, w1Shift);
-                  nb.wick2.time       = iTime(m_symbol, PERIOD_CURRENT, pivotShift);
+                  nb.wick1.lowPrice   = iLow(m_symbol, InpPrimaryTF, w1Shift);
+                  nb.wick2.time       = iTime(m_symbol, InpPrimaryTF, pivotShift);
                   nb.wick2.highPrice  = curTop;
-                  nb.wick2.lowPrice   = iLow(m_symbol, PERIOD_CURRENT, pivotShift);
+                  nb.wick2.lowPrice   = iLow(m_symbol, InpPrimaryTF, pivotShift);
                   nb.creationTime = TimeCurrent();
-                  nb.creationBarSerial = (int)Bars(m_symbol, PERIOD_CURRENT);
+                  nb.creationBarSerial = (int)Bars(m_symbol, InpPrimaryTF);
                   nb.serial       = ++m_blockSerialCounter;
                   nb.tradeId      = StringFormat("OTTO_RES_%d", nb.serial);
 
@@ -357,7 +357,7 @@ private:
                     {
                      if(dist > 1)
                         for(int s = pivotShift + 1; s < w1Shift; s++)
-                           if(iHigh(m_symbol, PERIOD_CURRENT, s) < zoneBot)
+                           if(iHigh(m_symbol, InpPrimaryTF, s) < zoneBot)
                              { hasSeparation = true; break; }
                     }
                   else
@@ -367,14 +367,14 @@ private:
                     {
                      nb.isVetoed = true;
                      nb.vetoReason = VETO_NO_SEPARATION;
-                     nb.deleteOnBarTime = iTime(m_symbol, PERIOD_CURRENT, 0);
+                     nb.deleteOnBarTime = iTime(m_symbol, InpPrimaryTF, 0);
                     }
                   else if(h > (1.5 * m_w1ResAtr) || h < (0.1 * m_w1ResAtr))
                     {
                      // --- SIZING VETO (0.1x – 1.5x ATR window) ---
                      nb.isVetoed = true;
                      nb.vetoReason = VETO_SIZING;
-                     nb.deleteOnBarTime = iTime(m_symbol, PERIOD_CURRENT, 0);
+                     nb.deleteOnBarTime = iTime(m_symbol, InpPrimaryTF, 0);
                     }
 
                   // --- EXCLUSIVE TERRITORY (v5.34 Part 2): skip entirely when
@@ -392,7 +392,7 @@ private:
          // Update W1 state regardless of block creation
          m_w1ResTop = curTop;
          m_w1ResBot = curBot;
-         m_w1ResTime = iTime(m_symbol, PERIOD_CURRENT, pivotShift);
+         m_w1ResTime = iTime(m_symbol, InpPrimaryTF, pivotShift);
          m_w1ResAtr  = GetATRAtShift(pivotShift);
          m_w1ResDay  = marketDay;
         }
@@ -401,13 +401,13 @@ private:
       // ============ SUPPORT (pivot low) ============
       if(m_marketStruct != NULL && m_marketStruct.IsPivotLow(pivotShift))
         {
-         double curTop = MathMin(iOpen(m_symbol, PERIOD_CURRENT, pivotShift),
-                                 iClose(m_symbol, PERIOD_CURRENT, pivotShift));
-         double curBot = iLow(m_symbol, PERIOD_CURRENT, pivotShift);
+         double curTop = MathMin(iOpen(m_symbol, InpPrimaryTF, pivotShift),
+                                 iClose(m_symbol, InpPrimaryTF, pivotShift));
+         double curBot = iLow(m_symbol, InpPrimaryTF, pivotShift);
 
          if(m_w1SupTime != 0)
            {
-            int w1Shift = iBarShift(m_symbol, PERIOD_CURRENT, m_w1SupTime);
+            int w1Shift = iBarShift(m_symbol, InpPrimaryTF, m_w1SupTime);
             int dist    = w1Shift - pivotShift;
 
             if(dist >= MinBlockDistance && dist <= MaxBlockDistance)
@@ -427,19 +427,19 @@ private:
                   nb.midpoint     = (zoneTop + zoneBot) / 2.0;
                   nb.atrSnapshot  = GetATRAtShift(pivotShift);
                   nb.wick1Time    = m_w1SupTime;
-                  nb.wick2Time    = iTime(m_symbol, PERIOD_CURRENT, pivotShift);
+                  nb.wick2Time    = iTime(m_symbol, InpPrimaryTF, pivotShift);
                   // FIX (v5.58) support mirror of the W1/W2 geometry above. W1:
                   // m_w1SupBot IS the W1 candle low, while m_w1SupTop is the W1
                   // BODY bottom -- so the high comes from the series. W2 is the
                   // pivot bar: curBot is its iLow().
                   nb.wick1.time       = m_w1SupTime;
-                  nb.wick1.highPrice  = iHigh(m_symbol, PERIOD_CURRENT, w1Shift);
+                  nb.wick1.highPrice  = iHigh(m_symbol, InpPrimaryTF, w1Shift);
                   nb.wick1.lowPrice   = m_w1SupBot;
-                  nb.wick2.time       = iTime(m_symbol, PERIOD_CURRENT, pivotShift);
-                  nb.wick2.highPrice  = iHigh(m_symbol, PERIOD_CURRENT, pivotShift);
+                  nb.wick2.time       = iTime(m_symbol, InpPrimaryTF, pivotShift);
+                  nb.wick2.highPrice  = iHigh(m_symbol, InpPrimaryTF, pivotShift);
                   nb.wick2.lowPrice   = curBot;
                   nb.creationTime = TimeCurrent();
-                  nb.creationBarSerial = (int)Bars(m_symbol, PERIOD_CURRENT);
+                  nb.creationBarSerial = (int)Bars(m_symbol, InpPrimaryTF);
                   nb.serial       = ++m_blockSerialCounter;
                   nb.tradeId      = StringFormat("OTTO_SUP_%d", nb.serial);
 
@@ -451,7 +451,7 @@ private:
                     {
                      if(dist > 1)
                         for(int s = pivotShift + 1; s < w1Shift; s++)
-                           if(iLow(m_symbol, PERIOD_CURRENT, s) > zoneTop)
+                           if(iLow(m_symbol, InpPrimaryTF, s) > zoneTop)
                              { hasSeparation = true; break; }
                     }
                   else
@@ -461,13 +461,13 @@ private:
                     {
                      nb.isVetoed = true;
                      nb.vetoReason = VETO_NO_SEPARATION;
-                     nb.deleteOnBarTime = iTime(m_symbol, PERIOD_CURRENT, 0);
+                     nb.deleteOnBarTime = iTime(m_symbol, InpPrimaryTF, 0);
                     }
                   else if(h > (1.5 * m_w1SupAtr) || h < (0.1 * m_w1SupAtr))
                     {
                      nb.isVetoed = true;
                      nb.vetoReason = VETO_SIZING;
-                     nb.deleteOnBarTime = iTime(m_symbol, PERIOD_CURRENT, 0);
+                     nb.deleteOnBarTime = iTime(m_symbol, InpPrimaryTF, 0);
                     }
 
                   // --- EXCLUSIVE TERRITORY (v5.34 Part 2): skip entirely when
@@ -484,7 +484,7 @@ private:
 
          m_w1SupTop = curTop;
          m_w1SupBot = curBot;
-         m_w1SupTime = iTime(m_symbol, PERIOD_CURRENT, pivotShift);
+         m_w1SupTime = iTime(m_symbol, InpPrimaryTF, pivotShift);
          m_w1SupAtr  = GetATRAtShift(pivotShift);
          m_w1SupDay  = marketDay;
         }
@@ -518,7 +518,7 @@ private:
          SSniperBlock b = m_blocks[i];
 
          // --- DELETION (Pine: bar_index >= delete_on_bar) ---
-         if(b.deleteOnBarTime > 0 && iTime(m_symbol, PERIOD_CURRENT, 0) > b.deleteOnBarTime)
+         if(b.deleteOnBarTime > 0 && iTime(m_symbol, InpPrimaryTF, 0) > b.deleteOnBarTime)
            {
             RemoveBlock(i);
             continue;
@@ -528,9 +528,9 @@ private:
          if(b.isVetoed)
             continue;
 
-         double close1 = iClose(m_symbol, PERIOD_CURRENT, 1);
-         double high1  = iHigh(m_symbol, PERIOD_CURRENT, 1);
-         double low1   = iLow(m_symbol, PERIOD_CURRENT, 1);
+         double close1 = iClose(m_symbol, InpPrimaryTF, 1);
+         double high1  = iHigh(m_symbol, InpPrimaryTF, 1);
+         double low1   = iLow(m_symbol, InpPrimaryTF, 1);
 
          // --- hasExited: price left the zone on a wick basis ------------
          // A wick clear of the zone means price has left it and the setup is
@@ -707,7 +707,7 @@ public:
      {
       m_symbol       = symbol;
       m_marketStruct = marketStruct;
-      m_atrHandle    = iATR(m_symbol, PERIOD_CURRENT, ATRPeriod);
+      m_atrHandle    = iATR(m_symbol, InpPrimaryTF, ATRPeriod);
       if(m_atrHandle == INVALID_HANDLE)
         {
          Print("[BlockManager] ERROR: Failed to create ATR handle");
@@ -715,6 +715,7 @@ public:
         }
       if(EnableLogging)
          Print("[BlockManager] Initialized for ", m_symbol,
+               " | TF ", EnumToString(InpPrimaryTF),
                " | Pivot ", InpLeftBars, "/", InpRightBars,
                " | ATR ", ATRPeriod,
                " | Sizing ", ATRVetoMin, "x-", ATRVetoMax, "x ATR");
@@ -727,7 +728,7 @@ public:
    //+------------------------------------------------------------------+
    void              Update(int marketDay)
      {
-      datetime barTime = iTime(m_symbol, PERIOD_CURRENT, 0);
+      datetime barTime = iTime(m_symbol, InpPrimaryTF, 0);
       if(barTime == m_lastProcessedBarTime)
          return;                       // once per new bar
       m_lastProcessedBarTime = barTime;
@@ -768,7 +769,7 @@ public:
       RefreshATRHistory();
       m_currentATR = GetATRAtShift(0);   // so IsBlockedByPrimary uses a valid ATR
 
-      int totalBars = (int)Bars(m_symbol, PERIOD_CURRENT);
+      int totalBars = (int)Bars(m_symbol, InpPrimaryTF);
       if(totalBars <= InpLeftBars + InpRightBars + 2) return;
       int scanLimit = (int)MathMin(LookbackBars, totalBars - InpLeftBars - InpRightBars - 2);
       if(scanLimit <= InpRightBars + 1) return;
@@ -779,13 +780,13 @@ public:
          // ======================== RESISTANCE ========================
          if(m_marketStruct.IsPivotHigh(s))
            {
-            double curTop = iHigh(m_symbol, PERIOD_CURRENT, s);
-            double curBot = MathMax(iOpen(m_symbol, PERIOD_CURRENT, s), iClose(m_symbol, PERIOD_CURRENT, s));
-            datetime curTime = iTime(m_symbol, PERIOD_CURRENT, s);
+            double curTop = iHigh(m_symbol, InpPrimaryTF, s);
+            double curBot = MathMax(iOpen(m_symbol, InpPrimaryTF, s), iClose(m_symbol, InpPrimaryTF, s));
+            datetime curTime = iTime(m_symbol, InpPrimaryTF, s);
 
             if(m_w1ResTime != 0)
               {
-               int w1Shift = iBarShift(m_symbol, PERIOD_CURRENT, m_w1ResTime);
+               int w1Shift = iBarShift(m_symbol, InpPrimaryTF, m_w1ResTime);
                int dist    = w1Shift - s;
                if(dist >= MinBlockDistance && dist <= MaxBlockDistance)
                  {
@@ -814,12 +815,12 @@ public:
                      // is the warm-up reader, iHigh()/iLow() are shift-agnostic.
                      nb.wick1.time       = m_w1ResTime;
                      nb.wick1.highPrice  = m_w1ResTop;
-                     nb.wick1.lowPrice   = iLow(m_symbol, PERIOD_CURRENT, w1Shift);
+                     nb.wick1.lowPrice   = iLow(m_symbol, InpPrimaryTF, w1Shift);
                      nb.wick2.time       = curTime;
                      nb.wick2.highPrice  = curTop;
-                     nb.wick2.lowPrice   = iLow(m_symbol, PERIOD_CURRENT, s);
+                     nb.wick2.lowPrice   = iLow(m_symbol, InpPrimaryTF, s);
                      nb.creationTime = curTime;
-                     nb.creationBarSerial = (int)Bars(m_symbol, PERIOD_CURRENT);
+                     nb.creationBarSerial = (int)Bars(m_symbol, InpPrimaryTF);
                      nb.serial       = ++m_blockSerialCounter;
                      nb.tradeId      = StringFormat("OTTO_RES_%d", nb.serial);
 
@@ -829,7 +830,7 @@ public:
                        {
                         if(dist > 1)
                            for(int k = s + 1; k < w1Shift; k++)
-                              if(iHigh(m_symbol, PERIOD_CURRENT, k) < zoneBot) { hasSeparation = true; break; }
+                              if(iHigh(m_symbol, InpPrimaryTF, k) < zoneBot) { hasSeparation = true; break; }
                        }
                      else
                         hasSeparation = true;
@@ -866,13 +867,13 @@ public:
          // ======================== SUPPORT ========================
          if(m_marketStruct.IsPivotLow(s))
            {
-            double curTop = MathMin(iOpen(m_symbol, PERIOD_CURRENT, s), iClose(m_symbol, PERIOD_CURRENT, s));
-            double curBot = iLow(m_symbol, PERIOD_CURRENT, s);
-            datetime curTime = iTime(m_symbol, PERIOD_CURRENT, s);
+            double curTop = MathMin(iOpen(m_symbol, InpPrimaryTF, s), iClose(m_symbol, InpPrimaryTF, s));
+            double curBot = iLow(m_symbol, InpPrimaryTF, s);
+            datetime curTime = iTime(m_symbol, InpPrimaryTF, s);
 
             if(m_w1SupTime != 0)
               {
-               int w1Shift = iBarShift(m_symbol, PERIOD_CURRENT, m_w1SupTime);
+               int w1Shift = iBarShift(m_symbol, InpPrimaryTF, m_w1SupTime);
                int dist    = w1Shift - s;
                if(dist >= MinBlockDistance && dist <= MaxBlockDistance)
                  {
@@ -897,13 +898,13 @@ public:
                      nb.wick2Time    = curTime;
                      // FIX (v5.58) support mirror of the warm-up W1/W2 geometry.
                      nb.wick1.time       = m_w1SupTime;
-                     nb.wick1.highPrice  = iHigh(m_symbol, PERIOD_CURRENT, w1Shift);
+                     nb.wick1.highPrice  = iHigh(m_symbol, InpPrimaryTF, w1Shift);
                      nb.wick1.lowPrice   = m_w1SupBot;
                      nb.wick2.time       = curTime;
-                     nb.wick2.highPrice  = iHigh(m_symbol, PERIOD_CURRENT, s);
+                     nb.wick2.highPrice  = iHigh(m_symbol, InpPrimaryTF, s);
                      nb.wick2.lowPrice   = curBot;
                      nb.creationTime = curTime;
-                     nb.creationBarSerial = (int)Bars(m_symbol, PERIOD_CURRENT);
+                     nb.creationBarSerial = (int)Bars(m_symbol, InpPrimaryTF);
                      nb.serial       = ++m_blockSerialCounter;
                      nb.tradeId      = StringFormat("OTTO_SUP_%d", nb.serial);
 
@@ -913,7 +914,7 @@ public:
                        {
                         if(dist > 1)
                            for(int k = s + 1; k < w1Shift; k++)
-                              if(iLow(m_symbol, PERIOD_CURRENT, k) > zoneTop) { hasSeparation = true; break; }
+                              if(iLow(m_symbol, InpPrimaryTF, k) > zoneTop) { hasSeparation = true; break; }
                        }
                      else
                         hasSeparation = true;
@@ -1108,7 +1109,7 @@ public:
            {
             m_blocks[i].isVetoed = true;
             m_blocks[i].vetoReason = VETO_FLIPPED;   // reclaimed by hive-mind
-            m_blocks[i].deleteOnBarTime = iTime(m_symbol, PERIOD_CURRENT, 0);
+            m_blocks[i].deleteOnBarTime = iTime(m_symbol, InpPrimaryTF, 0);
             if(m_blocks[i].limitOrderTicket > 0)
                m_blocks[i].pendingOrderCancel = true;
            }

@@ -1,11 +1,11 @@
 //+------------------------------------------------------------------+
 //|                                                       OttoEA.mq5 |
 //|                    OTTO — Goat Funded Trader (GFT) Master Build    |
-//|                    Pine Script Master Build Port (v5.65)            |
+//|                    Pine Script Master Build Port (v5.66)            |
 //|                                    Institutional / Real-Money    |
 //+------------------------------------------------------------------+
 #property copyright "OTTO EA - Goat Funded Trader (GFT) Master Build"
-#property version   "5.65"
+#property version   "5.66"
 #property description "OTTO EA â€” Goat Funded Trader (GFT) Master Build"
 #property description "Structural vetoes only: Separation | Sizing | Broken | Flipped"
 #property description "Modules: Risk | Block Manager | Order Mgmt | Trail"
@@ -181,7 +181,7 @@ int OnInit(void)
    g_symbol = _Symbol;
 
    Print("==============================================================");
-   Print("  OTTO EA v5.65 — 28-Pair Institutional Master Build — INITIALIZING");
+   Print("  OTTO EA v5.66 — 28-Pair Institutional Master Build — INITIALIZING");
    Print("  Symbol: ", g_symbol, " | Magic: ", MagicNumber);
    Print("==============================================================");
 
@@ -379,7 +379,7 @@ int OnInit(void)
    // --- Market-day counter init (mirrors ta.change(time("D"))) ---
    g_lastDailyBarTime = iTime(_Symbol, PERIOD_D1, 0);
    g_marketDay        = 0;
-   g_lastBarTime      = iTime(_Symbol, PERIOD_CURRENT, 0);
+   g_lastBarTime      = iTime(_Symbol, InpPrimaryTF, 0);
 
    // --- Sync existing trade state ---
    g_tradeManager.SyncTradeState();
@@ -531,9 +531,11 @@ void CheckDailyReset(void)
 //+------------------------------------------------------------------+
 //| New-bar detection â€” gates the block formation + veto funnel      |
 //+------------------------------------------------------------------+
+//| v5.66: keyed on InpPrimaryTF (default M15), NOT on the chart     |
+//| period, so the funnel follows the primary TF, not the chart.     |
 bool IsNewBar(void)
   {
-   datetime barTime = iTime(_Symbol, PERIOD_CURRENT, 0);
+   datetime barTime = iTime(_Symbol, InpPrimaryTF, 0);
    if(barTime == g_lastBarTime)
       return false;
    g_lastBarTime = barTime;

@@ -4,7 +4,7 @@
 //|              OTTO EA — exact Pine v4.70 execution port           |
 //+------------------------------------------------------------------+
 #property copyright "OTTO EA - Goat Funded Trader (GFT) Master Build"
-#property version   "5.65"
+#property version   "5.66"
 
 #ifndef __OTTO_ORDER_MANAGER__
 #define __OTTO_ORDER_MANAGER__
@@ -2670,7 +2670,7 @@ public:
                   mod.hasPlacedOrder     = true;
                   mod.isArmed            = false;
                   mod.hasExited          = false;
-                  mod.deleteOnBarTime    = iTime(m_symbol, PERIOD_CURRENT, 0);
+                  mod.deleteOnBarTime    = iTime(m_symbol, InpPrimaryTF, 0);
                   m_blockManager.SetBlockAt(bi, mod);
                   if(EnableLogging)
                      Print("[OrderManager] FILL RETIRED: block ", mod.tradeId,
@@ -2922,7 +2922,7 @@ public:
          block.hasPlacedOrder      = true;
          block.isArmed             = false;
          block.hasExited           = false;
-         block.deleteOnBarTime     = iTime(m_symbol, PERIOD_CURRENT, 0);
+         block.deleteOnBarTime     = iTime(m_symbol, InpPrimaryTF, 0);
          m_blockManager.SetBlockAt(bi, block);
 
          // v5.43 -- hand the setup's pre-minted session to THIS basket before

@@ -1,12 +1,12 @@
 //+------------------------------------------------------------------+
 //|                                                   OttoDefines.mqh |
-//|             OTTO EA v5.65 — 28-Pair Institutional Master Build |
+//|             OTTO EA v5.66 — 28-Pair Institutional Master Build |
 //|                 Central Definitions / Enums / Input Parameters    |
 //|         Exact MQL5 port of Pine Script "prop_guard_tester.pine"   |
 //+------------------------------------------------------------------+
 #property copyright "OTTO EA - Goat Funded Trader (GFT) Master Build"
-#property version   "5.65"
-#property description "OTTO v5.65 — Goat Funded Trader (GFT) Master Build (Wick1+Wick2 | Separation | Sizing | Broken | Flipped — structural vetoes only)"
+#property version   "5.66"
+#property description "OTTO v5.66 — Goat Funded Trader (GFT) Master Build (Wick1+Wick2 | Separation | Sizing | Broken | Flipped — structural vetoes only)"
 
 #ifndef __OTTO_DEFINES__
 #define __OTTO_DEFINES__
@@ -246,6 +246,7 @@ input int      MagicNumber       = 20240624;   // Unique EA Magic Number
 input string   TradeComment      = "OTTO";     // Trade comment prefix
 input bool     EnableLogging     = true;       // Detailed console/file logging
 input bool     EnableJournal     = true;       // Write human-readable .txt trade journal
+input ENUM_TIMEFRAMES InpPrimaryTF = PERIOD_M15; // Primary TF: structure | ATR | blocks
 
 input group "══════════════════════════════════════════════════"
 input group "  [1] PIVOT STRUCTURE (Pine: Left=8, Right=3)"
@@ -257,7 +258,7 @@ input int      MaxBlockDistance  = 150;        // Max bars between W1 and W2 for
 input int      LookbackBars      = 300;        // Bars the pivot engine may reference
 
 input group "══════════════════════════════════════════════════"
-input group "  [2] STRUCTURAL VETOES — v5.65 (geometry only)"
+input group "  [2] STRUCTURAL VETOES — v5.66 (geometry only)"
 input group "══════════════════════════════════════════════════"
 // v5.63 — AUXILIARY VETO PURGE. This group used to hold six discretion
 // filters (FVG, Momentum, Front-Run, Stale 45D, Near-Miss 6D) plus the
@@ -409,7 +410,7 @@ input int      RetryDelayMs       = 500;      // Retry delay (milliseconds)
 input int      MaxSpreadPoints    = 50;       // Max spread (points) for new entries
 
 input group "══════════════════════════════════════════════════"
-input group "  [7] RETIRED NEWS SHIELD — v5.65 (no-ops)"
+input group "  [7] RETIRED NEWS SHIELD — v5.66 (no-ops)"
 input group "══════════════════════════════════════════════════"
 // v5.63 — NEWS SHIELD PURGE. COttoNewsFilter.mqh is deleted: the calendar
 // blackout never fired in production (EnableNewsFilter defaulted to false and
@@ -435,7 +436,7 @@ input double   SafetyDailyDDLimit  = 3.0;     // Soft breach: pause new orders a
 input double   SafetyTotalDDLimit  = 5.0;     // Hard breach: close all + halt at this % (Trailing)
 
 input group "══════════════════════════════════════════════════"
-input group "  [9] RETIRED VECTOR ENGINE — v5.65 (no-ops)"
+input group "  [9] RETIRED VECTOR ENGINE — v5.66 (no-ops)"
 input group "══════════════════════════════════════════════════"
 // v5.63 — CURRENCY-VECTOR PURGE. COttoCorrelationFilter.mqh is deleted. It
 // carried two distinct things, and BOTH were part of the auxiliary veto layer:
@@ -458,7 +459,7 @@ input int      InpAnchorTF           = PERIOD_H1;  // RETIRED (v5.63) - no-op, k
 input bool     InpCancelOpposingPendings = true; // RETIRED (v5.63) - no-op, kept for .set compatibility
 
 input group "══════════════════════════════════════════════════"
-input group "  [10] HIGH TABLE AUDITOR — v5.65"
+input group "  [10] HIGH TABLE AUDITOR — v5.66"
 input group "══════════════════════════════════════════════════"
 // Decoupled watchdog: audits live state on its OWN timer cadence rather
 // than inside OnTick, so a halted / paused / tick-starved trade loop can
@@ -468,7 +469,7 @@ input bool     InpEnableHighTable       = true;  // Enable High Table watchdog
 input int      InpHighTableAuditSeconds = 5;     // Audit cadence (seconds, >= 1)
 
 input group "══════════════════════════════════════════════════"
-input group "  [11] MANUAL TRADE ADOPTION — v5.65"
+input group "  [11] MANUAL TRADE ADOPTION — v5.66"
 input group "══════════════════════════════════════════════════"
 // Let this EA manage positions opened BY HAND on its own chart symbol.
 // A manual position is identified as a MAGIC-0 position on m_symbol: the
@@ -485,7 +486,7 @@ input int      InpManualNoSLWarnMinutes = 5;     // Re-warn cadence for a manual
 
 //+------------------------------------------------------------------+
 input group "══════════════════════════════════════════════════"
-input group "  [12] RETIRED VETO REVERSAL CONVERSIONS — v5.65"
+input group "  [12] RETIRED VETO REVERSAL CONVERSIONS — v5.66"
 input group "══════════════════════════════════════════════════"
 // v5.34 built five switches that let a vetoed Phase 1 setup be re-used as a
 // Phase 2 REVERSAL instead of being discarded.

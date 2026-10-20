@@ -1,0 +1,129 @@
+566: primary timeframe -- structure, ATR and the bar gate now run on M15 instead of the chart period
+
+RATIONALE
+
+  Until now the EA had NO timeframe parameter. All 70 timeframe call sites
+  read PERIOD_CURRENT, which resolves to whatever period the chart the EA is
+  attached to happens to use. The same .set file therefore produced different
+  structure on an H1 chart and an M15 chart, and the ATR that sets stop
+  distance scaled with the chart rather than with the strategy.
+
+  This commit makes the strategy period explicit and pins it to M15.
+
+  THIS IS A BEHAVIOUR CHANGE, NOT A CONFIG CHANGE. It is listed here because
+  the arithmetic is not cosmetic:
+
+    - slDist = blockHeight + 0.5 * ATR now reads M15 ATR instead of H1 ATR.
+      ATR(14) on M15 is roughly a quarter of ATR(14) on H1, so the 0.5*ATR
+      term shrinks, stops tighten, and risk-based lots grow for the same
+      risk percent.
+
+    - Bar-count inputs silently re-base, because they are now counted in
+      M15 bars rather than chart bars:
+          MaxBlockDistance = 150  ->  ~6.25 days on H1,  ~37.5 h on M15
+          LookbackBars     = 300  ->  ~12.5 days on H1,  ~75 h on M15
+
+  Existing .set files need no edit: the input DID NOT EXIST before, so no
+  saved value is orphaned. Anyone who wanted the old chart-following
+  behaviour can set InpPrimaryTF to the period they used to run.
+
+SOURCE
+
+  otto.mq5                 input ENUM_TIMEFRAMES InpPrimaryTF = PERIOD_M15
+                           declared in the [GENERAL] group of OttoDefines.mqh,
+                           which is included before every module, so the symbol
+                           is in scope at all use sites.
+
+  PERIOD_CURRENT -> InpPrimaryTF, 70 occurrences in 5 files:
+
+      COttoBlockManager.mqh    53   (ATR handle, block formation, vetoes)
+      COttoMarketStructure.mqh 11   (pivot detection, structure helpers)
+      COttoOrderManager.mqh     2   (entry price / cross checks)
+      COttoTradeManager.mqh     2   (trail / management reads)
+      otto.mq5                  2   (new-bar gate, ATR handle)
+
+  DELIBERATELY NOT CHANGED:
+
+      otto.mq5:380 and :550    iTime(_Symbol, PERIOD_D1, 0) -- the market-day
+                               counter is a calendar concept, not a strategy
+                               period. It must keep rolling at midnight broker
+                               time regardless of InpPrimaryTF.
+
+      InpAnchorTF              still `input int = PERIOD_H1`, still RETIRED
+                               (v5.63), still has ZERO readers. Left declared
+                               so existing .set files keep loading. It is an
+                               int, not an ENUM_TIMEFRAMES, and is NOT the
+                               primary timeframe -- do not confuse the two.
+
+  Support edits:
+
+      COttoBlockManager:717    init log now prints the TF alongside pivot /
+                               ATR / sizing, so the journal states the period
+                               actually in force.
+      otto.mq5:534             IsNewBar() header says the gate is keyed on
+                               InpPrimaryTF, not the chart period.
+      README.md                one note documenting the contract and the
+                               bar-count re-basing.
+
+  Version stamps 5.65 -> 5.66, 20 literals, via _tools/_bump_version.py.
+
+METHOD
+
+  Every content edit was made BYTE-LEVEL (open 'rb' / open 'wb'), not through
+  a text-mode round trip. otto.mq5 carries 10 mojibake em-dash sequences
+  (c3 a2 e2 82 ac e2 80 9d) and OttoDefines.mqh carries real ones; a
+  text-mode write with the wrong codec re-encodes them and corrupts the tree
+  further. The new comment lines in otto.mq5 were inserted ABOVE the mojibake
+  banner and never reconstructed it. Verified after the fact: strict UTF-8
+  decode succeeds on all 9 sources, mojibake count still exactly 10, zero
+  U+FFFD introduced, no BOM, no bare LF.
+
+  Note the working tree is CRLF while the index stores LF (core.autocrlf), so
+  git diff must be read with that in mind: a byte-level write that preserves
+  the working-tree CRLF does not produce a whole-file rewrite in the diff.
+
+VERIFICATION
+
+  _tools/build_check.ps1 -NoDeploy
+
+      Result: 0 errors, 0 warnings, 10784 ms, X64 Regular
+      All 8 Otto modules [STAGED] -- no stale headers from the terminal
+      Include tree
+      binary: otto.ex5 (227460 bytes)
+
+  This is the load-bearing check: InpPrimaryTF is only visible to the modules
+  if the declaration really does precede them in include order. 0 errors from
+  a cold staging tree proves it resolves at all 70 sites.
+
+  _tools/scan_encoding.ps1
+
+      9/9 sources: bom=none, validUTF8=True, bareLF=0
+
+  diff is token + stamp + doc only:
+
+      git diff --stat -> 10 files, 98 insertions, 88 deletions
+
+          6 files  token rewrite, 68 changed lines (70 hits, 2 lines pair up)
+          8 files  20 version literals (5.65 -> 5.66)
+          3 files  doc/support: input row, init-log row, IsNewBar header (2
+                   lines), README note (5 lines + 1 blank spacer)
+
+      Every changed line is one of those. Non-token, non-stamp, non-doc
+      changed lines = 0.
+
+  PERIOD_CURRENT census after the change: 0 occurrences tree-wide.
+  PERIOD_D1 census: still 2, both the market-day counter.
+
+  Probes: 25 GREEN / 4 RED, identical to the 3b01230 baseline. The 4 RED are
+  pre-existing and unrelated to the timeframe:
+
+      test_v528_hotfix.py      53/64
+      test_v531_smart_trim.py  12/35
+      test_v532_hightable.py
+      test_v543_session.py
+
+  Highlighted suites after the change:
+
+      test_v564_pullback.py    51/51
+      test_v563_noveto.py     138/138
+      test_v530_price_guard.py 44/44
