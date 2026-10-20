@@ -4,7 +4,7 @@
 //|            OTTO EA — dynamic file editing, cancellation, email       |
 //+------------------------------------------------------------------+
 #property copyright "OTTO EA - Goat Funded Trader (GFT) Master Build"
-#property version   "5.62"
+#property version   "5.63"
 
 #ifndef __OTTO_JOURNAL__
 #define __OTTO_JOURNAL__
@@ -22,6 +22,33 @@ private:
 
    string            FmtPrice(double p)
      { return DoubleToString(p, (int)SymbolInfoInteger(_Symbol, SYMBOL_DIGITS)); }
+
+   //+--------------------------------------------------------------+
+   //| Projected target (v5.63).                                    |
+   //|                                                              |
+   //| SSniperBlock::localTP was deleted with the Front-Run veto -- |
+   //| the projection had no other reader and no TP is ever sent to  |
+   //| the broker. The journal still PRINTS a target because it is   |
+   //| the operator's situational context, so the value is re-derived |
+   //| here from the block's own stored geometry:                    |
+   //|                                                              |
+   //|   target = farEdge +/- InpMaxRR * rrUnit                      |
+   //|                                                              |
+   //| rrUnit IS the stop distance (blockHeight + 0.5*ATR), which is |
+   //| exactly the slDist the retired field was projected from, and   |
+   //| farEdge is the edge the breakout crosses -- so this reproduces |
+   //| the deleted localTP arithmetic rather than inventing a new    |
+   //| convention. Returns 0 when the block carries no geometry yet.  |
+   //+--------------------------------------------------------------+
+   double            ProjectedTarget(const SSniperBlock &blk, ENUM_TRADE_DIRECTION dir)
+     {
+      if(blk.rrUnit <= 0.0) return 0.0;
+      double tpRR    = (InpMaxRR > 0.0) ? InpMaxRR : 1.0;
+      double farEdge = (dir == DIR_LONG) ? MathMax(blk.top, blk.bottom)
+                                         : MathMin(blk.top, blk.bottom);
+      return (dir == DIR_LONG) ? farEdge + tpRR * blk.rrUnit
+                               : farEdge - tpRR * blk.rrUnit;
+     }
    string            FmtPips(double d)
      {
       double pt = SymbolInfoDouble(m_symbol, SYMBOL_POINT);
@@ -177,17 +204,17 @@ public:
       W("  Setup ID          : " + tradeId);
       W("  Logic             : " + phase);
       W("  Execution Mode    : " + execMode);
-      W("  Trigger Price     : " + FmtPrice(entryPrice) + " (Front-Run: far edge +/- 0.5*ATR)");
+      W("  Trigger Price     : " + FmtPrice(entryPrice) + " (Front-Edge entry: far edge +/- 0.5*ATR)");
       W("  Initial SL        : " + FmtPrice(slPrice) + " | 1R = " + FmtPrice(blk.rrUnit));
       W("  Volume            : " + DoubleToString(lotSize,2));
       string actionDesc = "";
       if(btype == BLOCK_SUPPORT)
-         actionDesc = "SUPPORT (Front-Run Breakdown / Sell at Bottom Edge - 0.5*ATR | SL at Top Edge)";
+         actionDesc = "SUPPORT (Continuation Breakdown / Sell at Bottom Edge - 0.5*ATR | SL at Top Edge)";
       else
-         actionDesc = "RESISTANCE (Front-Run Breakout / Buy at Top Edge + 0.5*ATR | SL at Bottom Edge)";
+         actionDesc = "RESISTANCE (Continuation Breakout / Buy at Top Edge + 0.5*ATR | SL at Bottom Edge)";
       W("  Trade             : " + actionDesc);
       W("  Block Top/Bottom  : Top=" + FmtPrice(blk.top) + " | Bottom=" + FmtPrice(blk.bottom) + " | Mid=" + FmtPrice(blk.midpoint) + " | Height=" + FmtPrice(blk.blockHeight));
-      W("  Projected Target  : " + FmtPrice(blk.localTP) + " (Front-Run veto anchor, far edge +/- 1R)");
+      W("  Projected Target  : " + FmtPrice(ProjectedTarget(blk, dir)) + " (InpMaxRR projection, far edge +/- RR x 1R; context only - exits are trail-based)");
       if(blk.wick1Time > 0 && blk.wick2Time > 0)
         {
          W("  Wick 1 (Anchor)   : " + TimeToString(blk.wick1Time) + " H=" + FmtPrice(blk.wick1.highPrice) + " L=" + FmtPrice(blk.wick1.lowPrice));
@@ -218,14 +245,14 @@ public:
       W("================================================================");
       W("[TRADE ENTRY] Session " + m_sessionID + " | " + m_symbol + " (" + (dir==DIR_LONG?"BUY / LONG":"SELL / SHORT") + ") | " + TimeToString(TimeCurrent()));
       W("  Execution Price   : " + FmtPrice(entryPrice));
-      W("  Initial Stop Loss : " + FmtPrice(slPrice) + " | 1R = " + FmtPrice(blk.rrUnit) + " | Target = " + FmtPrice(blk.localTP));
+      W("  Initial Stop Loss : " + FmtPrice(slPrice) + " | 1R = " + FmtPrice(blk.rrUnit) + " | Target = " + FmtPrice(ProjectedTarget(blk, dir)));
       W("  Volume & Sizing   : " + DoubleToString(lotSize,2) + " Lots | Risk: $" + DoubleToString(riskMoney,2));
       W("  S/R Block:");
       string actionDesc = "";
       if(blk.type == BLOCK_SUPPORT)
-         actionDesc = "SUPPORT (Front-Run Breakdown / Sell at Bottom Edge - 0.5*ATR | SL at Top Edge)";
+         actionDesc = "SUPPORT (Continuation Breakdown / Sell at Bottom Edge - 0.5*ATR | SL at Top Edge)";
       else
-         actionDesc = "RESISTANCE (Front-Run Breakout / Buy at Top Edge + 0.5*ATR | SL at Bottom Edge)";
+         actionDesc = "RESISTANCE (Continuation Breakout / Buy at Top Edge + 0.5*ATR | SL at Bottom Edge)";
       W("    - Logic     : " + actionDesc);
       W("    - Zone      : Top=" + FmtPrice(blk.top) + " | Bottom=" + FmtPrice(blk.bottom) + " | Mid=" + FmtPrice(blk.midpoint) + " | Height=" + FmtPrice(blk.blockHeight));
       if(blk.wick1Time > 0 && blk.wick2Time > 0)

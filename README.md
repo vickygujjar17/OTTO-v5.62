@@ -1,23 +1,30 @@
 # OTTO EA
 
 MetaTrader 5 Expert Advisor — MQL5 port of the Pine Script `prop_guard_tester.pine`
-master build. **Current base: v5.62**
+master build. **Current base: v5.63**
 
 ## Layout
 
 | File | Role |
 |---|---|
 | `OttoDefines.mqh` | Central enums, structs and `input` parameters |
-| `COttoNewsFilter.mqh` | News shield |
 | `COttoRiskManager.mqh` | Position sizing / risk |
 | `COttoMarketStructure.mqh` | Market-day counter, structure helpers |
-| `COttoBlockManager.mqh` | Wick1+Wick2 S/R block lifecycle and vetoes |
+| `COttoBlockManager.mqh` | Wick1+Wick2 S/R block lifecycle and structural vetoes |
 | `COttoOrderManager.mqh` | Order placement, pyramiding basket, journal hooks |
-| `COttoCorrelationFilter.mqh` | Cross-symbol correlation veto |
 | `COttoTradeManager.mqh` | Cut / cost-BE / lock3 / ATR trail / pyramiding |
 | `COttoJournal.mqh` | Human-readable trade journal |
 | `CHighTableAuditor.mqh` | "High Table" decoupled watchdog: CSV audit trail + latched email alerts |
 | `otto.mq5` | EA entry point and event handlers |
+
+### Removed in v5.63 — auxiliary veto layer
+
+`COttoNewsFilter.mqh` (calendar blackout) and `COttoCorrelationFilter.mqh`
+(currency-vector consensus + cross-chart Hive-Mind arbiter) are deleted. With
+them go the Front-Run, Stale 45D, Near-Miss 6D, Momentum and FVG vetoes. What
+survives is the structural funnel only: **Separation, Sizing, Broken, Flipped**.
+Their `input` declarations remain as labelled no-ops so existing `.set` files
+still load.
 
 ## Build (strict gate)
 

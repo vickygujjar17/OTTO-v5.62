@@ -1,0 +1,327 @@
+563: refactor — purge the auxiliary veto layer; the funnel decides STRUCTURE only
+
+RATIONALE
+
+  Every veto in v5.62 answered one of two different questions, and they were
+  wired into the same funnel as if they were one thing.
+
+  STRUCTURAL -- is this ZONE still valid, judged from closed candles?
+    VETO_SIZING         zone height outside the 0.1x-1.5x ATR window
+    VETO_NO_SEPARATION  no candle strictly outside the W1/W2 band
+    VETO_BROKEN         close beyond the far edge -> blacklisted
+    VETO_FLIPPED        wide-range break -> polarity flipped
+  These are properties of the geometry that FORMED the zone. They are
+  deterministic, they cannot disagree with each other, and they are the
+  actual strategy.
+
+  AUXILIARY -- is this a good trade right now?
+    Front-Run    the InpMaxRR target was touched before entry
+    Stale 45D    45 market days elapsed since W1 with no entry
+    Near-Miss 6D 6 market days loitering within one zone-height of the edge
+    Momentum     any of the last 8 bars ranged more than 3.5x its ATR
+    FVG          a 3-bar Fair Value Gap against the zone
+    Correlation  the portfolio's currency-vector consensus disagreed
+    News Shield  an economic-calendar blackout window was open
+  These are discretion filters. Each one discards a structurally valid zone
+  for a reason that has nothing to do with the zone, and each is a separate
+  opinion about "attractive" that can silently outvote the strategy. Two of
+  them (Momentum, FVG) even defaulted to DISABLED while still costing eight
+  ATR lookups per armed block per bar.
+
+  v5.63 deletes the second layer completely. A block now ages out ONLY by
+  being broken, flipped, deleted after a structural veto, or consumed by a
+  fill -- never by a clock and never by a target it did not reach.
+
+SOURCE
+
+  OttoDefines.mqh -- ENUM_VETO_REASON trimmed to 5 enumerators (was 11)
+    VETO_MOMENTUM / VETO_FVG / VETO_STALE / VETO_FRONTRUN / VETO_NEARMISS /
+    VETO_CORRELATION removed. VETO_NONE / VETO_SIZING / VETO_NO_SEPARATION /
+    VETO_BROKEN / VETO_FLIPPED kept. The header comment now states the
+    invariant that keeps this from regressing: every remaining reason is a
+    property of the ZONE GEOMETRY.
+
+  OttoDefines.mqh -- SSniperBlock shrinks by 7 fields
+    - localTP      (the InpMaxRR projection; its ONLY consumer was Front-Run)
+    - wick1Day     (market-day of W1; its ONLY consumer was Stale 45D)
+    - minProxDist / anchorTime / anchorDay / anchorPrice / anchorId
+                   (the v4.30 Near-Miss trackers, all five)
+
+  OttoDefines.mqh -- 17 inputs retired as DECLARED NO-OPS
+    Group [2]  InpUseFvgVeto, InpUseMomVeto, InpUseNearMissVeto,
+               InpUseFrontRunVeto, InpUseStaleVeto, InpStaleDays
+    Group [7]  EnableNewsFilter, NewsMinutesBefore, NewsMinutesAfter,
+               InpSimNewsShield, InpSimMacroVeto, InpSimSentiment
+    Group [9]  InpEnableVectorEngine, InpConsensusVetoThreshold,
+               InpUseExternalAnchors, InpAnchorTF, InpCancelOpposingPendings
+
+    KEPT AS DECLARATIONS, NOT DELETED, on the v5.52 precedent for
+    InpShiftReversalEntry: an existing .set file must still LOAD. Deleting an
+    input makes MT5 reject the whole .set with "unknown input", which on a
+    live VPS means the EA comes up on defaults instead of the operator's
+    tuned values -- a far worse failure than a knob that does nothing. Each
+    one is relabelled "RETIRED (v5.63) - no-op, kept for .set compatibility",
+    and test_v563_noveto.py asserts that NO shipped source reads any of them,
+    so a "harmless" re-wire fails the probe.
+
+    InpMaxRR SURVIVES as a live input and is NOT a veto knob: it was only
+    ever the take-profit PROJECTION multiple, whose first reader happened to
+    be the Front-Run veto. The journal still prints the projected target, so
+    retiring the input would have silently dropped that row from every setup
+    journal.
+
+  OttoDefines.mqh -- groups [2], [7], [9] relabelled
+    [2] VETO SETTINGS (NOISE REDUCTION) - v4.70
+        -> [2] STRUCTURAL VETOES - v5.63 (geometry only)
+    [7] NEWS SHIELD (real + simulated per Pine)
+        -> [7] RETIRED NEWS SHIELD - v5.63 (no-ops)
+    [9] CURRENCY VECTOR & AFFINITY ENGINE - v5.62
+        -> [9] RETIRED VECTOR ENGINE - v5.63 (no-ops)
+    OttoDefines' #property description no longer advertises
+    "Front-Run | Near-Miss | Stale Vetoes | Currency-Vector Consensus".
+
+  COttoBlockManager.mqh -- ProcessBlocks() funnel, 4 branches removed
+    Order is now: deletion -> hasExited -> Arming -> Break/Flip.
+
+    - STALE (45D):        marketDay - b.wick1Day >= InpStaleDays
+    - FRONT-RUN:          the far-edge InpMaxRR target was touched pre-entry
+                          (this branch was the SOLE reader of localTP and of
+                          the far-edge projection inside this class)
+    - NEAR-MISS (6D):     proximity anchor + 6 market days
+    - MOMENTUM & FVG:     the 8-bar scan over GetATRAtShift(1..8)
+
+    The ARMING test and the BREAK/FLIP test are untouched, character for
+    character: arming looks past the NEAR edge, the break past the FAR edge,
+    so a block still cannot arm and be vetoed BROKEN in one pass.
+
+  COttoBlockManager.mqh -- UpdateIntraBar() is now an EMPTY seam
+    Its entire body was the Front-Run re-check (so a hit on the live forming
+    bar was caught immediately) and the 6-day Near-Miss expiry. Both gone,
+    which leaves no work: a block's fate is decided on bar close. Kept as an
+    explicit empty body so the public CheckVetoesInTick() entry point and its
+    OnTick call site still resolve -- the removal stays visible in the call
+    graph instead of becoming a dangling reference.
+
+  COttoBlockManager.mqh -- VetoReasonString() trimmed, m_anchorCounter gone
+    The switch drops MOMENTUM / FVG / STALE / FRONT-RUN / NEAR-MISS. The
+    anchor counter was written only by the Near-Miss branch.
+
+  COttoBlockManager.mqh -- wick1Day writes removed at all 4 creation sites
+    (live + warm-up, resistance + support). m_w1ResDay / m_w1SupDay are kept:
+    they STILL gate MinBlockDistance/MaxBlockDistance-adjacent logic and are
+    reset in the same places, so deleting them would be a wider change than
+    this release needs.
+
+  COttoOrderManager.mqh -- PlaceOrArmOrder() gate ladder reduced
+    Removed: IsTradeVetoed(), IsConsensusOpposed() + the VETO_CORRELATION
+    write-back, and SentimentPasses(). What remains is spread, then
+    CanPlaceForDirection(). Directional sanity is now decided ONCE, from this
+    chart's own state, and nothing downstream re-litigates it against outside
+    data. The same three-way strip is applied to CheckVirtualTriggers(), so
+    the physical and virtual legs still run an IDENTICAL ladder.
+
+  COttoOrderManager.mqh -- the TP projection is deleted (2 sites)
+    PlaceOrArmOrder() and the virtual-fire commit both derived
+    farEdge +/- tpRR*slDist and stored it in block.localTP. No TP is ever
+    transmitted (request.tp is 0 on every send; exits are trail-only), so the
+    value existed solely for the Front-Run veto to compare against. The
+    journal's "Projected Target" row is now derived on demand instead of
+    read back -- see COttoJournal::ProjectedTarget().
+
+  COttoOrderManager.mqh -- SentimentPasses() deleted
+    Its only callers were the two paths above. InpSimSentiment is a no-op.
+
+  COttoOrderManager.mqh -- CancelOpposingConsensusOrders() deleted (83 lines)
+    The v5.26 strict-outlier sweep: it walked THIS chart's resting pendings
+    (physical, then virtual) and deleted any whose direction fought the
+    portfolio currency-vector consensus. Replaced by a tombstone comment, and
+    the OnTick call site is gone with it. Nothing cancels an order on
+    consensus any more.
+
+  COttoOrderManager.mqh -- Initialize() signature lost its 4th parameter
+    Initialize(symbol, riskManager, blockManager, correlationFilter)
+      -> Initialize(symbol, riskManager, blockManager)
+    with the m_correlationFilter member, its ctor init and the include gone.
+
+  COttoOrderManager.mqh -- cancel-reason ladders trimmed (2 sites)
+    The per-vetoReason strings for FRONT-RUN / STALE / NEAR-MISS / MOMENTUM /
+    FVG / CORRELATION are removed from both the physical and virtual cancel
+    paths; SIZING / NO_SEPARATION / BROKEN / FLIPPED remain.
+
+  otto.mq5 -- HiveMind() now resolves the conflict LOCALLY
+    This is the subtlest change in the release. HiveMind() used to compute
+    supportVote / resistanceVote / mappedVote and then DELEGATE the decision
+    to g_correlationFilter.ResolveBidirectionalConflict(), which summed every
+    PEER chart's bias through the correlation matrix (GetWeightedBiasSum over
+    TS_Bias_* global variables), then BroadcastBias() republished this chart's
+    own vote for the next instance. So the zones that survived on THIS chart
+    were chosen by the books of OTHER charts.
+
+    That delegate is part of what is being removed, so the majority is now
+    counted from this chart's own live zones: mappedVote > 0 keeps
+    Resistance, mappedVote < 0 keeps Support, an exact tie deletes both.
+
+    The rewrite also fixes the inversion the old code documented but
+    deliberately left alone: its branches passed BLOCK_RESISTANCE where their
+    own "kept Support" log line implied BLOCK_SUPPORT, and vice versa. With
+    the tie-breaker written as "delete the loser of the majority" the correct
+    pairing is structural rather than a remembered detail.
+
+  otto.mq5 -- two includes, two globals, four init/teardown blocks removed
+    #include <Otto/COttoNewsFilter.mqh>
+    #include <Otto/COttoCorrelationFilter.mqh>
+    COttoNewsFilter g_newsFilter;  COttoCorrelationFilter g_correlationFilter;
+    plus their OnInit initialisation, the OnDeinit "Blackouts:" line, and the
+    "News: BLACKOUT/CLEAR" field of the hourly LogStatus() line. The Gold
+    kill-switch messages no longer promise that external-Gold correlation
+    tracking "remains active" -- there is no correlation module left.
+
+  otto.mq5 -- OnTick steps removed
+    STEP 1   news filter (already inert; the comment now says REMOVED)
+    STEP 3   CheckVetoesInTick() is retained as a no-op seam, but its comment
+             now records that the intra-bar vetoes it hosted are gone
+    STEP 3b  g_correlationFilter.RefreshVectorState() +
+             g_orderManager.CancelOpposingConsensusOrders()
+    STEP 4   the placement gate drops the news-blackout term:
+             if(!g_newsFilter.IsInNewsBlackout() && !g_dailyDD_Paused)
+               -> if(!g_dailyDD_Paused)
+
+  COttoJournal.mqh -- ProjectedTarget() replaces the retired field
+    LogSetupArmed() and LogEntry() both printed blk.localTP. With the field
+    gone they call a private helper that re-derives
+    farEdge +/- InpMaxRR*rrUnit from the block's own stored geometry (rrUnit
+    IS the slDist the deleted projection used), so the printed target is
+    numerically identical rather than merely similar. The geometry label also
+    changes from "Front-Run Breakdown/Breakout" to "Continuation ..." -- the
+    ENTRY is still the front-edge anticipation, but the veto that gave it that
+    name is gone.
+
+  COttoNewsFilter.mqh, COttoCorrelationFilter.mqh -- DELETED
+    Both existed only to serve the auxiliary layer: a calendar blackout that
+    never fired in production (EnableNewsFilter defaulted false and the
+    calendar update was already bypassed) and a currency-vector engine whose
+    two halves were the portfolio-consensus veto and the cross-chart arbiter.
+
+  _tools/build_check.ps1 -- 3 hardcoded module lists 11 -> 9
+    ottoNames (staging-exclusion set), expectedOtto (the "all N OTTO sources"
+    guard) and ottoModules (the link-provenance audit). Left at 11, the gate
+    would abort on a correct tree with "staging incomplete, missing:
+    COttoNewsFilter.mqh". This is a GATE change, not a cosmetic one.
+
+  _tools/_bump_version.py, _tools/_vercensus.py -- FILES lists 11 -> 9
+  README.md -- module table and a "Removed in v5.63" section
+
+PROBES
+
+  NEW  _probe/test_v563_noveto.py -- 138 checks, ALL PASSING.
+       Asserts both halves of the release: the auxiliary layer is gone in
+       every form it existed (enum members, struct fields, input readers,
+       funnel branches, order-path gates, modules, OnTick steps), AND the
+       structural layer is intact and still wired. Every "is it gone" test
+       runs on comment-stripped source, because this release documents its own
+       removals in place and a raw substring test would fire on the
+       documentation. Absence-only probes pass on an empty file, so each
+       removed symbol is paired with a surviving one.
+
+  MIGRATED (assert the REMOVAL, coverage preserved, all GREEN)
+    test_v557_frontrun.py   93 -> 87 checks, now 87/87.
+       Sections 1-3, 5, 8 (ATR shift sync, the two entry twins, the inverted
+       cross test, the shipped anticipation default) test the ENTRY GEOMETRY
+       and are untouched -- that geometry still ships. Sections 4, 6, 7 tested
+       the purged target and now assert it is absent. The probe keeps its name
+       because it still guards the front-EDGE entry it was written around.
+    test_v531_smart_trim.py -- the InpMaxRR projection checks flipped; the
+       smart-trim failures are the pre-existing set, unchanged.
+    test_v528_hotfix.py    -- the CancelOpposingConsensusOrders section now
+       asserts removal; the 11 pre-existing failures are unchanged.
+    test_v532_hightable.py -- 2 checks re-anchored: group [9] is now
+       "RETIRED VECTOR ENGINE", and build_check.ps1 must say "9 OTTO sources".
+    test_v533_adoptmanual.py -- the news/macro gates became RETIRED_GATES: the
+       probe now asserts NEITHER switch gates adoption; group-label check
+       re-anchored on [10]. GREEN 228/228.
+    test_v540_hybrid.py    -- the consensus-sweep check inverted. GREEN 41/41.
+    ALL_FILES migrated in 19 probes + 3 mutators (they copy the tree into a
+    sandbox, so a stale entry is a hard crash, not a soft failure).
+
+  RETIRED  _probe/test_v526_vector.py
+       Its 83 assertions describe COttoCorrelationFilter, which no longer
+       exists. Reduced to a tombstone that runs no checks and exits 0: a
+       retired probe reporting "83/83 GREEN" against a tree with no vector
+       engine would be the worst possible outcome, but deleting the file would
+       throw away the only precise record of what the engine did.
+
+GATES
+
+  * build_check.ps1 -NoDeploy : 0 errors / 0 warnings, GATE PASSED, headers
+    verified from the staging tree (9 modules).
+  * Probe census: 24 GREEN / 4 RED across 28 probes.
+    BASELINE CONTROL: the same census run against the v5.62 commit in a
+    git worktree gave 23 GREEN / 4 RED across 27 probes. The four reds are the
+    SAME four in both runs and are pre-existing:
+      test_v528_hotfix     (57/68 -> 53/64; the dropped failure was a
+                            CancelOpposingConsensusOrders stub check, which went
+                            with the method)
+      test_v531_smart_trim (15/38 -> 12/35; same 12 failures + the 4 flipped
+                            InpMaxRR checks, all pre-existing otherwise)
+      test_v532_hightable  (125/135 both runs)
+      test_v543_session    (27/29 both runs)
+    Delta attributable to this release: +1 probe (test_v563_noveto, GREEN),
+    test_v526_vector RETIRED (was GREEN), and 5 probes converted RED -> GREEN
+    (v533, v540, v557 plus the two above re-anchored).
+  * Encoding: strict CRLF preserved, 0 bare LF / bare CR across all 9 sources
+    (normalize_eol.py --check: rewritten=0). Non-ASCII counts compared file by
+    file against the v5.62 blob: NO file gained a single mojibake marker;
+    otto.mq5 actually dropped 14 -> 10 because four damaged comment lines were
+    replaced by ASCII during the edits.
+  * Version: _bump_version.py 5.63 rewrote the human-facing rows and its
+    staleness census is clean. Three surviving "v5.62" literals in
+    COttoTradeManager.mqh are historical annotations of the release that
+    landed that change; they were re-marked with the script's own
+    "FIX (v5.62)" exemption rather than rewritten (rewriting them would have
+    falsified which release made the change).
+
+NOT PROVEN HERE
+
+  Behaviour. No Strategy Tester run accompanies this commit. The probe set is
+  static source analysis; the compile gate proves the tree builds, not that
+  the strategy is more profitable. Two consequences are UNMEASURED and should
+  be quantified before this is trusted on a funded account:
+
+    1. TRADE FREQUENCY WILL RISE. Stale 45D and Near-Miss 6D removed blocks
+       that would otherwise eventually have traded, and Front-Run removed the
+       ones the market had already run to target. Zones now persist until
+       price breaks them. Expect more setups and a lower average quality per
+       setup unless the structural vetoes were already filtering those cases.
+    2. HiveMind's delete decision changed SOURCE, not just code shape: it now
+       reads this chart only. On a 28-chart deployment the surviving zone of a
+       bidirectional conflict will sometimes be the one the old cross-chart
+       arbiter would have dropped. That is the intent, but the magnitude of
+       the behaviour change is unmeasured.
+
+  Also unproven: that the retired-input no-op approach actually round-trips a
+  real v5.62 .set file. It follows the v5.52/v5.55 precedent and the probe
+  asserts the declarations exist, but no .set was loaded into a terminal here.
+
+ROLLBACK
+
+  pre-commit : git checkout -- OttoDefines.mqh COttoBlockManager.mqh
+                             COttoOrderManager.mqh COttoJournal.mqh
+                             COttoTradeManager.mqh otto.mq5 README.md
+                             _tools/build_check.ps1 _tools/_bump_version.py
+                             _tools/_vercensus.py
+                             _probe/test_v526_vector.py _probe/test_v528_hotfix.py
+                             _probe/test_v531_smart_trim.py _probe/test_v532_hightable.py
+                             _probe/test_v533_adoptmanual.py _probe/test_v540_hybrid.py
+                             _probe/test_v557_frontrun.py
+               git checkout -- .              # the 19 ALL_FILES migrations
+               git checkout 9d42d2c -- COttoNewsFilter.mqh COttoCorrelationFilter.mqh
+               del _probe\test_v563_noveto.py _tools\_commit563.txt
+  post-commit: git reset --soft HEAD~1
+
+  NOTE the two deleted modules must be restored EXPLICITLY: a plain
+  `git checkout -- .` leaves them deleted in the index, so the tree would not
+  compile after a partial rollback.
+
+
+
+

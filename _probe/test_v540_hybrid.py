@@ -38,7 +38,6 @@ DEFS = os.path.join(ROOT, "OttoDefines.mqh")
 
 ALL_FILES = ["otto.mq5", "COttoOrderManager.mqh", "COttoTradeManager.mqh",
              "COttoRiskManager.mqh", "COttoBlockManager.mqh", "COttoJournal.mqh",
-             "COttoNewsFilter.mqh", "COttoCorrelationFilter.mqh",
              "COttoMarketStructure.mqh", "OttoDefines.mqh"]
 
 
@@ -179,8 +178,14 @@ check("pending count spans broker pendings + virtual orders",
       "count + m_virtualCount" in COUNT)
 check("invalid-block cleanup deletes a resting physical order",
       "DeleteOrder(physTicket)" in OM_T)
-check("consensus sweep deletes physical pendings",
-      "VECTOR CANCEL (physical)" in OM_T)
+check("consensus sweep is RETIRED (v5.63): no vector cancel path survives",
+      # The v5.26 sweep deleted this chart's pendings whose direction fought
+      # the portfolio consensus. The vector engine is deleted, so the method
+      # DECLARATION and its "[OrderManager] VECTOR CANCEL" log lines are gone
+      # and must not come back. (The v5.63 tombstone comment deliberately still
+      # names the method, so the test is on the signature, not on the word.)
+      "CancelOpposingConsensusOrders(void)" not in OM_T and
+      "VECTOR CANCEL" not in OM_T)
 check("direction conflict deletes physical pendings",
       "DIRECTION CONFLICT (physical)" in OM_T)
 check("cancel-all prunes physical pendings before emptying the book",

@@ -4,7 +4,7 @@
 //|              OTTO EA — exact Pine v4.70 execution port           |
 //+------------------------------------------------------------------+
 #property copyright "OTTO EA - Goat Funded Trader (GFT) Master Build"
-#property version   "5.62"
+#property version   "5.63"
 
 #ifndef __OTTO_ORDER_MANAGER__
 #define __OTTO_ORDER_MANAGER__
@@ -12,7 +12,8 @@
 #include "OttoDefines.mqh"
 #include "COttoRiskManager.mqh"
 #include "COttoBlockManager.mqh"
-#include "COttoCorrelationFilter.mqh"
+// v5.63: the COttoCorrelationFilter include is GONE with the vector engine.
+// Nothing in this class consults another chart's book any more.
 #include "COttoJournal.mqh"
 
 //+------------------------------------------------------------------+
@@ -41,7 +42,6 @@ private:
    string                  m_symbol;
    COttoRiskManager       *m_riskManager;
    COttoBlockManager      *m_blockManager;
-   COttoCorrelationFilter *m_correlationFilter;
    COttoJournal           *m_journal;
 
    // --- Active trade tracking ---
@@ -633,23 +633,6 @@ private:
      }
 
    //+------------------------------------------------------------------+
-   //| Sentiment simulation gate (Pine pass_sent)                      |
-   //+------------------------------------------------------------------+
-   bool                    SentimentPasses(const SSniperBlock &block)
-     {
-      if(InpSimSentiment == SENT_IGNORE)
-         return true;
-      // Sentiment is a statement about DIRECTION, so it must be tested against
-      // the MAPPED direction. Keyed on the raw zone, a Phase-2 Support block
-      // -- trading the S/R flip as a SHORT -- would pass a BULLISH filter and
-      // be refused by a BEARISH one, which is exactly backwards.
-      ENUM_TRADE_DIRECTION dir = GetDirectionForBlock(block);
-      if(InpSimSentiment == SENT_BULLISH && dir == DIR_LONG)  return true;
-      if(InpSimSentiment == SENT_BEARISH && dir == DIR_SHORT) return true;
-      return false;
-     }
-
-   //+------------------------------------------------------------------+
    //| Entry price per Pine entry_style (Midpoint / Front Edge)        |
    //| ENTRY_FRONT_EDGE: EXTREME FRONT-RUNNING ANTICIPATION. The entry |
    //| sits 0.5*ATR BEYOND the FAR edge the breakout crosses (b.top for|
@@ -702,8 +685,7 @@ private:
    //| entry price is legal for a pending order, and into an in-memory  |
    //| SVirtualOrder when price has already reached/through the zone.   |
    //| NO take-profit is attached on either path (exact mirror: exits   |
-   //| are purely trail-based; localTP is stored on the block only for  |
-   //| the Front-Run veto). A physical fill is caught by                |
+   //| are purely trail-based). A physical fill is caught by            |
    //| CheckPendingOrderFills(); a virtual arm fires its MARKET leg in  |
    //| CheckVirtualTriggers() on the cross.                             |
    //+------------------------------------------------------------------+
@@ -725,35 +707,14 @@ private:
 
       if(!IsSpreadAcceptable()) return false;
 
-      // Pine can_place + correlation veto (institutional)
+      // Pine can_place. v5.63: the correlation veto, the portfolio-consensus
+      // veto and the simulated-sentiment gate that used to follow this line
+      // are all purged. Directional sanity is now decided ONCE, structurally,
+      // by CanPlaceForDirection() -- spread, duplicate orders and the opposing
+      // open trade -- and nothing downstream re-litigates it against outside
+      // state.
       if(!CanPlaceForDirection(block)) return false;
       ENUM_TRADE_DIRECTION dir = GetDirectionForBlock(block);
-      if(m_correlationFilter != NULL && m_correlationFilter.IsTradeVetoed(dir))
-        {
-         if(EnableLogging)
-            Print("[Correlation] VETO on ", m_symbol,
-                  (dir == DIR_LONG ? " LONG" : " SHORT"));
-         return false;
-        }
-
-      // v5.26 — ADDITIVE portfolio-consensus layer. The ladder above is a
-      // per-chart geographic check; this one reads the whole book's currency
-      // vectors. Consensus is refreshed by the EA once per cycle, so this is
-      // a pure array read here — no per-block portfolio re-scan.
-      if(m_correlationFilter != NULL &&
-         m_correlationFilter.IsConsensusOpposed(m_symbol, dir))
-        {
-         block.isVetoed   = true;
-         block.vetoReason = VETO_CORRELATION;
-         m_blockManager.SetBlockAt(blockIndex, block);
-         if(EnableLogging)
-            Print("[Correlation] VECTOR VETO on ", m_symbol,
-                  (dir == DIR_LONG ? " LONG" : " SHORT"),
-                  " | consensus = ",
-                  DoubleToString(m_correlationFilter.GetPairConsensus(m_symbol), 1), "%");
-         return false;
-        }
-      if(!SentimentPasses(block)) return false;
 
       // --- Pine price computation ---
       // FIX (v5.57) — ATR SHIFT SYNC. Geometry is pinned to shift 1 (the last CLOSED
@@ -798,39 +759,16 @@ private:
       // targets on the correct side of the breakout.
       bool   isLong     = (GetDirectionForBlock(block) == DIR_LONG);
       double stopLoss   = isLong ? entryPrice - slDist : entryPrice + slDist;
-      // v5.31: the take-profit projection is InpMaxRR (default 4.0R).
-      // This must stay the SAME input the Front-Run veto projects from:
-      // once an order is resting the veto compares against block.localTP
-      // (below) rather than re-deriving the target, so a divergence between
-      // this line and the veto's projection would silently disable the veto.
-      double tpRR       = (InpMaxRR > 0.0) ? InpMaxRR : 1.0;
-      // FIX (v5.57) — FAR-EDGE ANCHOR. The target is measured from the edge the
-      // breakout crosses (block.top LONG / block.bottom SHORT), NOT from the
-      // anticipation `entryPrice`, which sits 0.5*ATR beyond that edge.
-      // Projecting from the entry pushed the target a further 0.5*ATR out --
-      // harsher than every pre-anticipation build -- so the Front-Run veto
-      // would miss setups it used to catch. slDist = blockHeight + 0.5*ATR and
-      // the anticipation entry maps a further 0.5*ATR past the far edge; every
-      // pre-anticipation build anchored its target ON that far edge, so this
-      // form reproduces the retired 'entryPrice +/- tpRR*slDist' target bit
-      // for bit. COttoBlockManager::ProcessBlocks projects identically.
-      // REALIZED RR (front-edge entry): the entry sits 0.5*ATR beyond the
-      // far edge while the target is anchored TO that edge, so the reward-
-      // to-risk taken off the ENTRY is InpMaxRR - (0.5*ATR / slDist) --
-      // slightly less than InpMaxRR, and less still the wider the ATR runs
-      // against the zone height (a 1.0-high zone at ATR 2.0 with InpMaxRR
-      // 4.0 -> 3.5R). Intentional: the target reproduces the pre-
-      // anticipation projection and keeps the veto strict. Do NOT "fix" it
-      // by anchoring the target on the entry.
-      double farEdge    = isLong ? MathMax(block.top, block.bottom)
-                                 : MathMin(block.top, block.bottom);
-      double takeProfit = isLong ? farEdge + tpRR * slDist
-                                 : farEdge - tpRR * slDist;
 
-      // Store local entry/SL/TP/rrUnit on the block (Pine b.local_*)
+      // Store local entry/SL/rrUnit on the block (Pine b.local_*).
+      // v5.63: block.localTP is GONE. The InpMaxRR projection existed only so
+      // the Front-Run veto could compare against it once an order was resting,
+      // and no TP is ever transmitted (request.tp is 0 on every send; exits are
+      // trail-only). The projected target survives in ONE place only -- the
+      // setup journal's "Projected Target" row -- which recomputes it from
+      // InpMaxRR rather than reading a stored field.
       block.localEntry = entryPrice;
       block.localSL    = stopLoss;
-      block.localTP    = takeProfit;
       block.rrUnit     = slDist;
 
       // Broker-level stop validation (isLong computed above with slDist)
@@ -2041,7 +1979,6 @@ public:
       m_symbol            = "";
       m_riskManager       = NULL;
       m_blockManager      = NULL;
-      m_correlationFilter = NULL;
       m_journal           = NULL;
       m_hasActiveTrade    = false;
       m_activeDirection   = DIR_NONE;
@@ -2089,13 +2026,11 @@ public:
    //+------------------------------------------------------------------+
    bool              Initialize(string symbol,
                                 COttoRiskManager       *riskManager,
-                                COttoBlockManager      *blockManager,
-                                COttoCorrelationFilter *correlationFilter)
+                                COttoBlockManager      *blockManager)
      {
       m_symbol            = symbol;
       m_riskManager       = riskManager;
       m_blockManager      = blockManager;
-      m_correlationFilter = correlationFilter;
       // v5.33: adoption state starts cold on every Initialize(). SyncActiveTrade()
       // below re-derives it from the book (a magic-0 leg already open across a
       // re-init is re-adopted there), but the throttle timestamp must not survive
@@ -2278,8 +2213,7 @@ public:
    //| WHY magic == 0 IS THE IDENTIFIER. MT5 assigns magic 0 only to     |
    //| positions submitted from the terminal's own New Order dialog;     |
    //| every EA stamps its own id. So "magic 0 AND this symbol" is the   |
-   //| operator's own hand and nothing else's -- the same discriminator  |
-   //| COttoCorrelationFilter already uses to recognise external gold.   |
+   //| operator's own hand and nothing else's.                          |
    //|                                                                  |
    //| WHY THE STOP IS MANDATORY. The basket's 1R is |entry - SL|: the   |
    //| milestone ladder, the pyramid rung sizing and the smart trim are  |
@@ -2326,13 +2260,14 @@ public:
       // convenience, so refusing it here is the safe direction.
       if(CountMyPendingOrders() > 0) return 0;
 
-      // ---- Gate 2: Pine's absolute lockdowns ---------------------------
-      // Mirrors PlaceOrdersForArmedBlocks(). The shield/veto are the
-      // operator saying "do not take risk right now", and that intent
-      // cannot depend on whether the leg was opened by a limit fill or by
-      // hand. Both are plain inputs, so this file takes no new dependency.
-      if(InpSimNewsShield) return 0;
-      if(InpSimMacroVeto)  return 0;
+      // ---- Gate 2: RETIRED (v5.63) -------------------------------------
+      // This was Pine's absolute lockdown: `InpSimNewsShield` and
+      // `InpSimMacroVeto` each refused adoption outright, mirroring the same
+      // pair in PlaceOrdersForArmedBlocks(). Both switches are now no-ops and
+      // the news shield / macro-veto layer is gone, so no gate stands here.
+      // Adoption is still refused by every gate above and by the no-SL check
+      // below, so the "do not take risk right now" intent survives as the
+      // daily-DD pause / total-DD halt handled by the EA before OnTick work.
 
       // ---- Gate 3: locate the OLDEST magic-0 position on this symbol ----
       // Oldest-wins with POSITION_TIME as the tie-break, matching
@@ -2462,8 +2397,6 @@ public:
    void              PlaceOrdersForArmedBlocks(void)
      {
       if(m_reversalInProgress) return;
-      if(InpSimNewsShield) return;          // Pine sim_news_shield: absolute lockdown
-      if(InpSimMacroVeto) return;           // Pine sim_macro_veto
 
       SSniperBlock blocks[];
       int count = m_blockManager.GetAllBlocks(blocks);
@@ -2659,8 +2592,6 @@ public:
    void              CheckVirtualTriggers(void)
      {
       if(m_reversalInProgress) return;
-      if(InpSimNewsShield) return;          // Pine sim_news_shield: absolute lockdown
-      if(InpSimMacroVeto) return;           // Pine sim_macro_veto
       if(m_virtualCount <= 0) return;
 
       double ask = GetAsk();
@@ -2708,28 +2639,9 @@ public:
          // --- Pine gates: the identical ladder every other path applies ---
          if(!IsSpreadAcceptable()) continue;
          if(!CanPlaceForDirection(blocks[bi])) continue;
-
-         if(m_correlationFilter != NULL && m_correlationFilter.IsTradeVetoed(vo.direction))
-           {
-            if(EnableLogging)
-               Print("[Correlation] VETO on ", m_symbol,
-                     (isLong ? " LONG" : " SHORT"), " (virtual trigger)");
-            continue;
-           }
-         if(m_correlationFilter != NULL &&
-            m_correlationFilter.IsConsensusOpposed(m_symbol, vo.direction))
-           {
-            SSniperBlock vet = blocks[bi];
-            vet.isVetoed   = true;
-            vet.vetoReason = VETO_CORRELATION;
-            m_blockManager.SetBlockAt(bi, vet);
-            if(EnableLogging)
-               Print("[Correlation] VECTOR VETO on ", m_symbol,
-                     (isLong ? " LONG" : " SHORT"), " (virtual trigger)");
-            RemoveVirtualOrderAt(v);
-            continue;
-           }
-         if(!SentimentPasses(blocks[bi])) continue;
+         // v5.63: correlation veto, portfolio-consensus veto and the synthetic
+         // sentiment gate are purged from this path too. The virtual leg now
+         // applies exactly the same three checks as the physical one.
          if(m_blockManager.IsBlockedByPrimary(bi)) continue;
 
          // v5.38 -- R/C PHASE TAG + REUSE OF THE ARM SESSION. v5.52: the marker
@@ -2855,24 +2767,12 @@ public:
          if(atr <= 0) atr = m_blockManager.GetATR();
          double slDist = (atr > 0) ? CalcSLDistance(block, atr)
                                    : MathAbs(vo.triggerPrice - vo.stopLoss);
-         // FIX (v5.58) FAR-EDGE ANCHOR, twin of PlaceOrArmOrder() above. localTP
-         // MUST stay the one price the Front-Run veto reads (the veto compares
-         // the market against block.localTP once the order rests), so the
-         // recovered projection is re-derived with the identical arithmetic
-         // rather than from the trigger: target = farEdge +/- tpRR * slDist.
-         // The retired form (vo.triggerPrice +/- slDist) anchored on the
-         // anticipation ENTRY -- a further 0.5*ATR out -- which is exactly the
-         // stretch PlaceOrArmOrder was re-anchored to undo; leaving it here
-         // would let the veto judge a different price after a virtual fire.
-         // At the reachable arm paths localTP already holds this exact value,
-         // so this is a consistency guarantee, not a behaviour change.
-         double tpRR    = (InpMaxRR > 0.0) ? InpMaxRR : 1.0;
-         double farEdge = isLong ? MathMax(block.top, block.bottom)
-                                 : MathMin(block.top, block.bottom);
+         // v5.63: the FIX(v5.58) far-edge InpMaxRR projection that used to be
+         // re-derived here is GONE with block.localTP. It existed solely so the
+         // Front-Run veto judged one price after a virtual fire; with the veto
+         // retired there is no reader left, and no TP is transmitted.
          block.localEntry = vo.triggerPrice;
          block.localSL    = vo.stopLoss;
-         block.localTP    = isLong ? farEdge + tpRR * slDist
-                                   : farEdge - tpRR * slDist;
          block.rrUnit     = slDist;
 
          // RETIRE the block: its ONE continuation entry has filled (this
@@ -2972,16 +2872,10 @@ public:
                   // with TryConvertToReversal(). conversionReason is now permanently
                   // VETO_NONE, so every drop is a plain cancellation.
                   string cancelReason = "Manual";
-                  if(blocks[i].vetoReason == VETO_FRONTRUN)           cancelReason = "Fired Front-Run 1:4 Veto";
-                  else if(blocks[i].vetoReason == VETO_STALE)         cancelReason = "Stale Veto (45D)";
-                  else if(blocks[i].vetoReason == VETO_NEARMISS)      cancelReason = "Near-Miss Veto (6D)";
-                  else if(blocks[i].vetoReason == VETO_MOMENTUM)      cancelReason = "Momentum Veto";
-                  else if(blocks[i].vetoReason == VETO_FVG)           cancelReason = "FVG Veto";
-                  else if(blocks[i].vetoReason == VETO_SIZING)        cancelReason = "Sizing Veto";
+                  if(blocks[i].vetoReason == VETO_SIZING)        cancelReason = "Sizing Veto";
                   else if(blocks[i].vetoReason == VETO_NO_SEPARATION) cancelReason = "Separation Veto";
                   else if(blocks[i].vetoReason == VETO_BROKEN)        cancelReason = "Block Broken";
                   else if(blocks[i].vetoReason == VETO_FLIPPED)       cancelReason = "Block Flipped";
-                  else if(blocks[i].vetoReason == VETO_CORRELATION)   cancelReason = "Vector Consensus Veto";
                   else if(blocks[i].pendingOrderCancel)               cancelReason = "Manual / Direction Conflict";
                   // v5.43 -- save/restore: a transient setup log must not steal the
                   // journal from a live basket (see PlaceOrArmOrder).
@@ -3011,16 +2905,10 @@ public:
                // TryConvertToReversal(). conversionReason is now permanently
                // VETO_NONE, so every drop is a plain cancellation.
                string cancelReason = "Manual";
-               if(blocks[i].vetoReason == VETO_FRONTRUN)       cancelReason = "Fired Front-Run 1:4 Veto";
-               else if(blocks[i].vetoReason == VETO_STALE)     cancelReason = "Stale Veto (45D)";
-               else if(blocks[i].vetoReason == VETO_NEARMISS)  cancelReason = "Near-Miss Veto (6D)";
-               else if(blocks[i].vetoReason == VETO_MOMENTUM)  cancelReason = "Momentum Veto";
-               else if(blocks[i].vetoReason == VETO_FVG)        cancelReason = "FVG Veto";
-               else if(blocks[i].vetoReason == VETO_SIZING)     cancelReason = "Sizing Veto";
+               if(blocks[i].vetoReason == VETO_SIZING)     cancelReason = "Sizing Veto";
                else if(blocks[i].vetoReason == VETO_NO_SEPARATION) cancelReason = "Separation Veto";
                else if(blocks[i].vetoReason == VETO_BROKEN)     cancelReason = "Block Broken";
                else if(blocks[i].vetoReason == VETO_FLIPPED)    cancelReason = "Block Flipped";
-               else if(blocks[i].vetoReason == VETO_CORRELATION) cancelReason = "Vector Consensus Veto";
                else if(blocks[i].pendingOrderCancel)           cancelReason = "Manual / Direction Conflict";
                // v5.38: reuse the arm-time session so the cancel lands in the
                // setup's ONE journal, with a fresh mint as the fallback.
@@ -3050,101 +2938,19 @@ public:
         }
      }
    //+------------------------------------------------------------------+
-   //| v5.26 — CancelOpposingConsensusOrders                        |
-   //| Strict outlier sweep: cancels any of OUR resting pendings whose    |
-   //| direction fights the portfolio currency-vector consensus beyond    |
-   //| InpConsensusVetoThreshold.                                         |
-   //|                                                                    |
-   //| v5.28: scoped to THIS chart's symbol. The magic filter alone is NOT |
-   //| safe here: every EA instance shares MagicNumber, so a magic-only    |
-   //| sweep made each of the ~28 charts walk the entire shared pending    |
-   //| book and delete every other chart's opposing order -- a cancel      |
-   //| storm across the whole portfolio. The consensus TEST stays global   |
-   //| (IsConsensusOpposed reads the portfolio vector); only the ACTOR is  |
-   //| now local, so each chart prunes only its own resting orders.        |
+   //| CancelOpposingConsensusOrders - REMOVED (v5.63)                  |
+   //|                                                                  |
+   //| This was the strict-outlier sweep: it deleted any of OUR resting  |
+   //| pendings (physical or virtual) whose direction fought the         |
+   //| portfolio currency-vector consensus, with the test itself         |
+   //| supplied by COttoCorrelationFilter -- a module this release       |
+   //| deletes.                                                          |
+   //|                                                                  |
+   //| Nothing replaces it. An order is cancelled ONLY because its own   |
+   //| block was vetoed structurally, its direction conflicted with the  |
+   //| active trade, or the operator/EA tore it down -- never because a  |
+   //| different chart's book disagreed.                                 |
    //+------------------------------------------------------------------+
-   void              CancelOpposingConsensusOrders(void)
-     {
-      if(!InpCancelOpposingPendings) return;
-      if(m_correlationFilter == NULL) return;
-
-      // v5.40 — PHYSICAL route sweep: walk the broker's resting pendings for
-      // THIS chart's symbol+magic and delete any whose direction fights the
-      // portfolio consensus. Scoped to m_symbol (v5.28) so every EA instance
-      // prunes only its OWN resting orders — no cancel storm across the book.
-      for(int i = OrdersTotal() - 1; i >= 0; i--)
-        {
-         ulong t = OrderGetTicket(i);
-         if(t <= 0 || !OrderSelect(t)) continue;
-         if(OrderGetInteger(ORDER_MAGIC) != MagicNumber) continue;
-         if(OrderGetString(ORDER_SYMBOL) != m_symbol) continue;
-
-         ENUM_ORDER_TYPE ot = (ENUM_ORDER_TYPE)OrderGetInteger(ORDER_TYPE);
-         ENUM_TRADE_DIRECTION odir = DIR_NONE;
-      if(ot == ORDER_TYPE_BUY_LIMIT || ot == ORDER_TYPE_BUY_STOP)   odir = DIR_LONG;
-      else if(ot == ORDER_TYPE_SELL_LIMIT || ot == ORDER_TYPE_SELL_STOP) odir = DIR_SHORT;
-      // v5.52: a BUY is a Resistance continuation (a breakout above it) and a
-      // SELL a Support continuation (a breakdown below it) -- the mapping
-      // GetDirectionForBlock() states unconditionally, so this leg's direction
-      // cannot disagree with the block it mirrors.
-      if(odir == DIR_NONE) continue;
-         if(!m_correlationFilter.IsConsensusOpposed(m_symbol, odir)) continue;
-
-         if(EnableLogging)
-            Print("[OrderManager] VECTOR CANCEL (physical): ticket ", t, " ", m_symbol,
-                  (odir == DIR_LONG ? " LONG" : " SHORT"),
-                  " | consensus = ",
-                  DoubleToString(m_correlationFilter.GetPairConsensus(m_symbol), 1), "%");
-         DeleteOrder(t);
-         int bi = m_blockManager.FindBlockIndexByTicket(t);
-         if(bi >= 0)
-           {
-            SSniperBlock mod;
-            if(m_blockManager.GetBlockAt(bi, mod))
-              {
-               mod.limitOrderTicket   = 0;
-               mod.pendingOrderCancel = false;
-               m_blockManager.SetBlockAt(bi, mod);
-              }
-           }
-        }
-
-      // v5.37 Part 3: walk our own in-memory virtual book (reverse, so
-      // RemoveVirtualOrderAt()'s compaction stays index-safe). Scoping this
-      // to m_virtualOrders[] is what the v5.28 note below always wanted:
-      // each chart now prunes only ITS OWN armed setups -- no shared broker
-      // book, no cancel storm across the portfolio.
-      for(int v = m_virtualCount - 1; v >= 0; v--)
-        {
-         SVirtualOrder vo = m_virtualOrders[v];
-         if(vo.direction == DIR_NONE) continue;
-
-         string sym = m_symbol;
-         if(!m_correlationFilter.IsConsensusOpposed(sym, vo.direction)) continue;
-
-         if(EnableLogging)
-            Print("[OrderManager] VECTOR CANCEL: serial ", vo.blockSerial, " ", sym,
-                  (vo.direction == DIR_LONG ? " LONG" : " SHORT"),
-                  " | consensus = ",
-                  DoubleToString(m_correlationFilter.GetPairConsensus(sym), 1), "%");
-
-         // Release any block still latched to this serial so the array can
-         // free the struct and the duplicate shield stays consistent.
-         int bi = m_blockManager.FindBlockIndexBySerial(vo.blockSerial);
-         if(bi >= 0)
-           {
-            SSniperBlock mod;
-            if(m_blockManager.GetBlockAt(bi, mod))
-              {
-               mod.limitOrderTicket = 0;
-               mod.pendingOrderCancel = false;
-               m_blockManager.SetBlockAt(bi, mod);
-              }
-           }
-
-         RemoveVirtualOrderAt(v);
-        }
-     }
 
 
 

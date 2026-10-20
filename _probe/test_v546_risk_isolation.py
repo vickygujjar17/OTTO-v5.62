@@ -47,8 +47,8 @@ MAIN = os.path.join(ROOT, "otto.mq5")
 
 ALL_FILES = ["otto.mq5", "COttoOrderManager.mqh", "COttoTradeManager.mqh",
              "COttoRiskManager.mqh", "COttoBlockManager.mqh", "COttoJournal.mqh",
-             "CHighTableAuditor.mqh", "COttoCorrelationFilter.mqh",
-             "COttoMarketStructure.mqh", "COttoNewsFilter.mqh",
+             "CHighTableAuditor.mqh",
+             "COttoMarketStructure.mqh",
              "OttoDefines.mqh"]
 
 

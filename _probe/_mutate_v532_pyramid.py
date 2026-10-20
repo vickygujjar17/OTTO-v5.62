@@ -42,7 +42,6 @@ REAL = ROOT
 PROBE = os.path.join("_probe", "test_v532_pyramid.py")
 FILES = ["otto.mq5", "COttoOrderManager.mqh", "COttoTradeManager.mqh",
          "COttoRiskManager.mqh", "COttoBlockManager.mqh", "COttoJournal.mqh",
-         "COttoNewsFilter.mqh", "COttoCorrelationFilter.mqh",
          "COttoMarketStructure.mqh", "OttoDefines.mqh"]
 
 # ---------------------------------------------------------------------------

@@ -97,9 +97,9 @@ Copy-Item (Join-Path $Source "*.mq5") $experts  -Force
 #    or collide with Include\Otto\OttoDefines.mqh and silently link stale
 #    code. Everything matching the OTTO module names or the Otto folder is
 #    therefore excluded from the framework mirror.
-$ottoNames = @("OttoDefines", "COttoNewsFilter", "COttoRiskManager",
+$ottoNames = @("OttoDefines", "COttoRiskManager",
                "COttoMarketStructure", "COttoBlockManager", "COttoOrderManager",
-               "COttoCorrelationFilter", "COttoTradeManager", "COttoJournal",
+               "COttoTradeManager", "COttoJournal",
                "CHighTableAuditor")
 $skipNames = New-Object System.Collections.Generic.HashSet[string] ([StringComparer]::OrdinalIgnoreCase)
 [void]$skipNames.Add("Otto")
@@ -136,10 +136,12 @@ if (-not (Test-Path $entryPath)) {
     exit 2
 }
 
-# Hard guarantee: all 11 OTTO sources must be present in the staging tree.
-$expectedOtto = @("OttoDefines", "COttoNewsFilter", "COttoRiskManager",
+# Hard guarantee: all 9 OTTO sources must be present in the staging tree.
+# v5.63: was 11. COttoNewsFilter and COttoCorrelationFilter are deleted with
+# the auxiliary veto layer, so a tree that still stages them is the OLD build.
+$expectedOtto = @("OttoDefines", "COttoRiskManager",
                   "COttoMarketStructure", "COttoBlockManager", "COttoOrderManager",
-                  "COttoCorrelationFilter", "COttoTradeManager", "COttoJournal",
+                  "COttoTradeManager", "COttoJournal",
                   "CHighTableAuditor")
 $missingStage = @()
 foreach ($m in $expectedOtto) {
@@ -221,9 +223,9 @@ if ($bytes.Length -ge 2 -and $bytes[0] -eq 0xFF -and $bytes[1] -eq 0xFE) {
 # module resolved outside the staging tree fails the gate outright.
 $lines = $text -split "`r?`n" | ForEach-Object { $_.TrimEnd("`r") }
 
-$ottoModules = @("OttoDefines", "COttoNewsFilter", "COttoRiskManager",
+$ottoModules = @("OttoDefines", "COttoRiskManager",
                  "COttoMarketStructure", "COttoBlockManager", "COttoOrderManager",
-                 "COttoCorrelationFilter", "COttoTradeManager", "COttoJournal",
+                 "COttoTradeManager", "COttoJournal",
                  "CHighTableAuditor")
 $linkedFromStage = @{}
 foreach ($line in $lines) {

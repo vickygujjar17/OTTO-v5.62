@@ -45,7 +45,6 @@ ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
 FILES = ["otto.mq5", "COttoOrderManager.mqh", "COttoTradeManager.mqh",
          "COttoRiskManager.mqh", "COttoBlockManager.mqh", "COttoJournal.mqh",
-         "COttoNewsFilter.mqh", "COttoCorrelationFilter.mqh",
          "COttoMarketStructure.mqh", "CHighTableAuditor.mqh",
          "OttoDefines.mqh"]
 

@@ -68,7 +68,6 @@ BUILD = os.path.join(ROOT, "_tools", "build_check.ps1")
 
 ALL_FILES = ["otto.mq5", "COttoOrderManager.mqh", "COttoTradeManager.mqh",
              "COttoRiskManager.mqh", "COttoBlockManager.mqh", "COttoJournal.mqh",
-             "COttoNewsFilter.mqh", "COttoCorrelationFilter.mqh",
              "COttoMarketStructure.mqh", "CHighTableAuditor.mqh",
              "OttoDefines.mqh"]
 
@@ -196,11 +195,23 @@ if ADOPT is not None:
         ("open EA positions are refused", r"if\s*\(\s*CountMyPositions\(\)\s*>\s*0\s*\)"),
         ("resting EA limit orders are refused",
          r"if\s*\(\s*CountMyPendingOrders\(\)\s*>\s*0\s*\)"),
-        ("the news shield is honored", r"if\s*\(\s*InpSimNewsShield\s*\)"),
-        ("the macro veto is honored", r"if\s*\(\s*InpSimMacroVeto\s*\)"),
+    ]
+    # v5.63: the news-shield and macro-veto refusals that stood here are
+    # RETIRED. Both switches are declared no-ops and the gate bodies were
+    # deleted from AdoptManualPosition(), so the invariant is now the
+    # opposite: neither switch may gate adoption again.
+    RETIRED_GATES = [
+        ("the retired news shield no longer gates adoption",
+         r"if\s*\(\s*InpSimNewsShield\s*\)"),
+        ("the retired macro veto no longer gates adoption",
+         r"if\s*\(\s*InpSimMacroVeto\s*\)"),
     ]
     for label, pat in GATES:
         check("gate: %s" % label, re.search(pat, ADOPT) is not None)
+
+    # v5.63: the two retired switches must NOT gate adoption any more.
+    for label, pat in RETIRED_GATES:
+        check(label, re.search(pat, ADOPT) is None)
 
     # Every gate must return 0 (a refusal), never a partial adopt. A gate that
     # merely skips a field would leave m_hasActiveTrade half-seeded.
@@ -763,8 +774,9 @@ check("Pine port banner names the current release",
       ("Master Build Port (v%s)" % RELEASE) in MAIN_T)
 check("the MANUAL TRADE ADOPTION input group names the current release",
       ("[11] MANUAL TRADE ADOPTION \u2014 v%s" % RELEASE) in DEFS_T)
-check("the versioned engine group labels were bumped with the release",
-      ("[9] CURRENCY VECTOR & AFFINITY ENGINE \u2014 v%s" % RELEASE) in DEFS_T and
+check("the versioned input-group labels were bumped with the release",
+      # v5.63: group [9] is retired with the vector engine, so the
+      # surviving versioned label asserted here is [10].
       ("[10] HIGH TABLE AUDITOR \u2014 v%s" % RELEASE) in DEFS_T)
 
 # Encoding contract: the adopted-basket telegraph is a plain-ASCII "-MAN" tail,

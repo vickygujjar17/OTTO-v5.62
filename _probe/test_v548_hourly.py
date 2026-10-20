@@ -35,8 +35,8 @@ JRN = os.path.join(ROOT, "COttoJournal.mqh")
 
 ALL_FILES = ["otto.mq5", "COttoOrderManager.mqh", "COttoTradeManager.mqh",
              "COttoRiskManager.mqh", "COttoBlockManager.mqh", "COttoJournal.mqh",
-             "CHighTableAuditor.mqh", "COttoCorrelationFilter.mqh",
-             "COttoMarketStructure.mqh", "COttoNewsFilter.mqh",
+             "CHighTableAuditor.mqh",
+             "COttoMarketStructure.mqh",
              "OttoDefines.mqh"]
 
 

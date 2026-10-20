@@ -4,7 +4,7 @@
 //|            OTTO EA - Cut / Cost-BE / ATR Trail / Pyramiding       |
 //+------------------------------------------------------------------+
 #property copyright "OTTO EA - Goat Funded Trader (GFT) Master Build"
-#property version   "5.62"
+#property version   "5.63"
 
 #ifndef __OTTO_TRADE_MANAGER__
 #define __OTTO_TRADE_MANAGER__
@@ -219,7 +219,8 @@ public:
       // that one tick so the broker can confirm the protective breakeven stop on
       // the new ticket before the dynamic trail takes over.
       // v5.29: generalised from t3OpenedThisTick. The Tranche 2 fill, the
-      // breakeven ratchet and (until v5.62) the trail activation all landed on
+      // breakeven ratchet and (until the FIX (v5.62) split) the trail activation
+      // all landed on
       // the SAME +1.0R tick, so the guard had to cover every rung. Scoping it to
       // Tranche 3 alone would have let a tight ATR trail be written over a
       // brand-new T2 ticket whose protective stop the broker had not yet
@@ -472,8 +473,8 @@ public:
       // in ApplyUnifiedSL() would reject it. Taking the tighter of the two means
       // the new leg is born wearing exactly the stop the basket already has, and
       // the normal milestone-ladder block below ratchets it forward on the next
-      // tick (v5.62: that block is the unconditional ApplyUnifiedSL(), no longer
-      // gated on currentRR >= InpTrailStartRR).
+      // tick (FIX (v5.62): that block is the unconditional ApplyUnifiedSL(), no
+      // longer gated on currentRR >= InpTrailStartRR).
       if(currentRR >= InpPyramidT3RR && m_orderManager.IsPyramidPending(3))
         {
          double t3FloorRaw = primaryEntry + (dir==DIR_LONG ? 1.0 : -1.0) * rrUnit;
@@ -569,8 +570,8 @@ public:
       // same reason as the milestone-ladder block above -- no stop write races the
       // broker's confirmation of the new ticket's protective stop. v5.29: this now
       // covers T2 as well as T3/T4, which matters because the T2 fill coincides
-      // with the +1.0R breakeven-rung activation (v5.62: no longer the ATR trail
-      // activation -- that now waits for +2.0R).
+      // with the +1.0R breakeven-rung activation (FIX (v5.62): no longer the ATR
+      // trail activation -- that now waits for +2.0R).
       double point = SymbolInfoDouble(m_symbol, SYMBOL_POINT);
       if(m_orderManager.GetBasketCount() <= 1 && !trancheOpenedThisTick)
         {

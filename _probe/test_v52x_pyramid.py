@@ -53,7 +53,6 @@ DEFS = os.path.join(ROOT, "OttoDefines.mqh")
 
 ALL_FILES = ["otto.mq5", "COttoOrderManager.mqh", "COttoTradeManager.mqh",
              "COttoRiskManager.mqh", "COttoBlockManager.mqh", "COttoJournal.mqh",
-             "COttoNewsFilter.mqh", "COttoCorrelationFilter.mqh",
              "COttoMarketStructure.mqh", "OttoDefines.mqh"]
 
 

@@ -71,8 +71,8 @@ JRN = os.path.join(ROOT, "COttoJournal.mqh")
 
 ALL_FILES = ["otto.mq5", "COttoOrderManager.mqh", "COttoTradeManager.mqh",
              "COttoRiskManager.mqh", "COttoBlockManager.mqh", "COttoJournal.mqh",
-             "CHighTableAuditor.mqh", "COttoCorrelationFilter.mqh",
-             "COttoMarketStructure.mqh", "COttoNewsFilter.mqh",
+             "CHighTableAuditor.mqh",
+             "COttoMarketStructure.mqh",
              "OttoDefines.mqh"]
 
 
@@ -247,19 +247,20 @@ check("it honours the named shift rather than a hardcoded slot",
 check("it returns 0 for an unpopulated slot rather than EMPTY_VALUE",
       "EMPTY_VALUE" in (BM_GET or "") and "return 0" in (BM_GET or ""))
 
-# The veto must read the same shift the order does, or the two judge
-# different ATRs. All three BlockManager consumers are named here so a
-# future shift change is a conscious edit.
-check("the Front-Run veto projection reads shift 1",
+# The veto used to read the same shift as the order, or the two judged
+# different ATRs. v5.63 removes the veto projection from the bar-close pass,
+# but the ORDER path still prices off shift 1 and the funnel still needs
+# atrNow, so the shift-1 invariant survives on both sides.
+check("the bar-close funnel still prices from shift 1",
       re.search(r"double atrNow = GetATRAtShift\(1\);", BM_PROC or "") is not None)
-check("the intra-bar twin reads shift 1",
-      re.search(r"double atrNow = GetATRAtShift\(1\);", BM_INTRA or "") is not None)
-check("BOTH veto passes are gated on InpUseFrontRunVeto",
-      _gates == 2, "found %d" % _gates)
-check("the bar-close pass only judges blocks that left the zone untriggered",
-      "if(InpUseFrontRunVeto && b.hasExited && !b.isTriggered)" in norm(BM_PROC or ""))
-check("the intra-bar pass re-checks every block, triggered or not",
-      "if(InpUseFrontRunVeto)" in norm(BM_INTRA or ""))
+check("the intra-bar seam no longer reads ATR at all (v5.63 retired its body)",
+      "GetATRAtShift" not in (BM_INTRA or ""))
+check("NEITHER BlockManager pass is gated on the retired InpUseFrontRunVeto",
+      _gates == 0, "found %d" % _gates)
+check("the bar-close pass no longer tests the Front-Run veto condition",
+      "InpUseFrontRunVeto" not in norm(BM_PROC or ""))
+check("the intra-bar pass no longer tests the Front-Run veto condition",
+      "InpUseFrontRunVeto" not in norm(BM_INTRA or ""))
 check("the anticipation entry applies at EVERY entry style, not just the default",
       len(re.findall(r"ENTRY_FRONT_EDGE", BM_PROC or "")) == 0
       and len(re.findall(r"ENTRY_FRONT_EDGE", BM_INTRA or "")) == 0,
@@ -299,58 +300,43 @@ check("the front-edge entry sits one full slDist from the near edge",
       BEP_BODY)
 
 # ----------------------------------------------------------------------
-# 4. The far-edge target anchor, in BOTH BlockManager passes
+# 4. The far-edge target anchor -- RETIRED (v5.63)
 # ----------------------------------------------------------------------
-print("\n-- 4. Far-edge target anchor --")
+# v5.57 pinned a far-edge InpMaxRR projection in BOTH BlockManager passes and
+# the OrderManager, so the Front-Run veto judged one price. v5.63 deletes the
+# veto, block.localTP and the projection. The surviving invariants are the
+# negatives: neither BlockManager pass nor the order path may re-derive a
+# target, and neither may read a stored one.
+print("\n-- 4. Far-edge target anchor (RETIRED v5.63) --")
 
-FAR_EDGE_LONG = "isLong ? MathMax(top, bottom) : MathMin(top, bottom);"
 for label, fn in (("ProcessBlocks", BM_PROC), ("UpdateIntraBar", BM_INTRA)):
     blob = canon(norm(fn or ""), "b")
-    check("%s anchors the target on the FAR edge" % label, FAR_EDGE_LONG in blob)
-    check("%s projects it by tpRR * calcSLDist" % label,
-          "isLong ? farEdge + tpRR * calcSLDist : farEdge - tpRR * calcSLDist;" in blob)
-    check("%s defers to the placed order's localTP once it exists" % label,
-          "target = localTP;" in blob)
-    check("%s measures the hit off the high/low pair" % label,
-          "bool hit = isLong ? (high" in blob)
-    check("%s still vetoes with VETO_FRONTRUN" % label,
-          "SetVeto(i, VETO_FRONTRUN);" in blob)
-    check("%s prices from the SAME shift-1 ATR the order uses" % label,
-          "double calcSLDist = blockHeight + (0.5 * atrNow);" in blob)
+    check("%s no longer projects a far-edge target" % label,
+          "farEdge" not in blob and "tpRR" not in blob)
+    check("%s no longer reads a stored localTP" % label, "localTP" not in blob)
+    check("%s no longer vetoes with VETO_FRONTRUN" % label,
+          "VETO_FRONTRUN" not in blob)
 
-check("both BlockManager passes carry the far-edge anchor",
-      len(re.findall(r"double farEdge = isLong \? MathMax\(b\.top, b\.bottom\)",
-                     BM_C)) == 2,
-      "found %d" % len(re.findall(r"double farEdge = isLong \? MathMax\(b\.top, b\.bottom\)", BM_C)))
-check("both passes defer to block.localTP",
-      len(re.findall(r"target = b\.localTP;", BM_C)) == 2)
+check("neither BlockManager pass projects a far-edge target",
+      len(re.findall(r"double farEdge", BM_C)) == 0)
+check("neither BlockManager pass defers to block.localTP",
+      len(re.findall(r"target = b\.localTP;", BM_C)) == 0)
 check("neither pass recalls a single-arg entry helper",
       "BlockEntryPrice(" not in BM_PROC and
       "BlockEntryPrice(" not in BM_INTRA)
 
-# The anchor is only FAR if the high edge is named first: on a valid block
-# top > bottom, so MathMax(top,bottom) SHORT would be near-edge anchored.
-# PlaceOrArmOrder holds the block by reference (&block), so its operand
-# names the variable rather than the literal field -- hence `\w+\.top`.
-anchor_kind = [re.search(r"isLong \? (Math\w+)\(\w+\.top, \w+\.bottom\)", c)
-               for c in (norm(BM_PROC or ""), norm(BM_INTRA or ""),
-                         norm(OM_PLACE or ""))]
-check("all three projections take the HIGH edge for a LONG",
-      all(m is not None and m.group(1) == "MathMax" for m in anchor_kind),
-      "ops=%s" % [m.group(1) if m else None for m in anchor_kind])
-check("the anchor comments state the top/bottom LONG-SHORT mapping",
-      "top LONG / b.bottom SHORT" in BM_RAW and
-      "top LONG / block.bottom SHORT" in OM_RAW)
+# The entry geometry the far-edge anchor was derived FROM is untouched: the
+# anticipation entry still sits 0.5*ATR beyond the edge the breakout crosses.
+check("the entry twins still agree on the anticipation geometry",
+      "BlockEntryPrice(" in BM_RAW and "CalcEntryPrice(" in OM_RAW and
+      "block.bottom + slDist" in OM_RAW)
 
-# The OrderManager must project the veto an IDENTICAL target from the same
-# anchor, or the veto would gate on a price the order never had.
+# The OrderManager must no longer project the veto's target at all.
 PLACE_CANON = canon(OM_PLACE or "", "block")
-check("OrderManager mirrors the far-edge anchor",
-      FAR_EDGE_LONG in PLACE_CANON)
-check("OrderManager projects it by tpRR * slDist",
-      "isLong ? farEdge + tpRR * slDist : farEdge - tpRR * slDist;" in PLACE_CANON)
-check("OrderManager writes the exact TP back to the block",
-      "localTP = takeProfit;" in PLACE_CANON)
+check("OrderManager no longer projects a far-edge target",
+      "farEdge" not in PLACE_CANON and "takeProfit" not in PLACE_CANON)
+check("OrderManager no longer writes a TP back to the block",
+      "localTP = takeProfit;" not in PLACE_CANON)
 
 
 # ----------------------------------------------------------------------
@@ -389,13 +375,15 @@ VIRT_W = norm(OM_VIRT or "")
 # whitespace before matching rather than pinning a column.
 check("rrUnit is seeded from the SAME slDist the order used",
       "rrUnit = slDist;" in PLACE_W)
-check("InpMaxRR is the one projection input, defaulting to 1.0 if unset",
-      "tpRR = (InpMaxRR > 0.0) ? InpMaxRR : 1.0;" in PLACE_W)
-check("the BlockManager checkout projects from the SAME InpMaxRR input",
-      "tpRR = (InpMaxRR > 0.0) ? InpMaxRR : 1.0;" in norm(BM_PROC or ""))
-check("the SL and TP both land on the block for the veto to read back",
+# v5.63: the InpMaxRR projection and the TP written back to the block are GONE
+# from both paths. Only localEntry / localSL / rrUnit land on the block.
+check("no InpMaxRR projection survives on the order path",
+      "tpRR" not in PLACE_W and "InpMaxRR" not in PLACE_W)
+check("the BlockManager no longer projects from InpMaxRR",
+      "tpRR" not in norm(BM_PROC or ""))
+check("only the SL lands on the block (no TP to read back)",
       "block.localSL = stopLoss;" in PLACE_W and
-      "block.localTP = takeProfit;" in PLACE_W)
+      "block.localTP" not in PLACE_W)
 check("the entry is reclaimed from the virtual trigger, not recomputed",
       "block.localEntry = vo.triggerPrice;" in VIRT_W)
 check("the stop is reclaimed from the armed virtual order",
@@ -468,10 +456,10 @@ check("neither twin consults ENTRY_FRONT_EDGE directly (it is the else-branch)",
       "ENTRY_FRONT_EDGE" not in (BM_BEP or ""))
 check("InpMaxRR defaults to 4.0",
       re.search(r"InpMaxRR\s*=\s*4\.0", DEFS_T) is not None)
-check("the front-run veto is switchable and defaults on",
+check("the Front-Run veto switch is retired but still loadable (v5.63)",
       re.search(r"InpUseFrontRunVeto\s*=\s*true", DEFS_T) is not None)
-check("the BlockManager gates both veto passes on InpUseFrontRunVeto",
-      _gates == 2)
+check("neither BlockManager pass is gated on the retired switch",
+      _gates == 0)
 check("the retired single-arg helper left no call site anywhere",
       "BlockEntryPrice(" not in BM_PROC and "BlockEntryPrice(" not in BM_INTRA)
 
@@ -522,9 +510,9 @@ check("the startup banner names the current release",
 # see: nothing reads the wick fields, so a regression here is silent.
 print("\n-- 10. Journal & wick geometry sync --")
 
-check("the journal names the front-run geometry, not the retired wording",
-      "Front-Run Breakdown / Sell at Bottom Edge - 0.5*ATR | SL at Top Edge" in JRN_RAW and
-      "Front-Run Breakout / Buy at Top Edge + 0.5*ATR | SL at Bottom Edge" in JRN_RAW)
+check("the journal names the CONTINUATION geometry, not the veto wording",
+      "Continuation Breakdown / Sell at Bottom Edge - 0.5*ATR | SL at Top Edge" in JRN_RAW and
+      "Continuation Breakout / Buy at Top Edge + 0.5*ATR | SL at Bottom Edge" in JRN_RAW)
 check("the retired 'Aggressive' block wording is gone",
       "Aggressive" not in JRN_RAW)
 
@@ -535,9 +523,11 @@ check("both journal blocks print the full zone marks (Mid + Height)",
       JRN_RAW.count('" | Mid=" + FmtPrice(blk.midpoint) + " | Height=" + FmtPrice(blk.blockHeight)') == 2)
 check("the armed header prints 1R and the projected target",
       'FmtPrice(blk.rrUnit)' in JRN_RAW and
-      "Projected Target  : " in JRN_RAW and "FmtPrice(blk.localTP)" in JRN_RAW)
+      "Projected Target  : " in JRN_RAW and "FmtPrice(ProjectedTarget(" in JRN_RAW)
+check("the target is re-derived locally, not read off the retired field",
+      "ProjectedTarget(" in JRN_RAW and "blk.localTP" not in JRN_RAW)
 check("the entry record prints the target alongside 1R",
-      '" | 1R = " + FmtPrice(blk.rrUnit) + " | Target = " + FmtPrice(blk.localTP)' in JRN_RAW)
+      '" | 1R = " + FmtPrice(blk.rrUnit) + " | Target = " + FmtPrice(ProjectedTarget(' in JRN_RAW)
 
 # The Wick H/L lines are now conditional, mirroring the entry block: a block
 # whose wick times are unpopulated prints no bogus zero row.
@@ -557,13 +547,14 @@ check("all four block-creation passes populate the full W1/W2 candle",
                            len(re.findall(r"nb\.wick1\.lowPrice\s*=", BM_C)),
                            len(re.findall(r"nb\.wick2\.lowPrice\s*=", BM_C))))
 
-# The virtual-fire commit re-derives localTP on the SAME far-edge anchor as
-# PlaceOrArmOrder; the retired form anchored it on the anticipation trigger, a
-# further 0.5*ATR out, which would let the veto judge a different price after
-# a virtual fire than it did while the order was armed.
-check("CheckVirtualTriggers re-derives localTP on the far edge (twin of PlaceOrArmOrder)",
-      "block.localTP = isLong ? farEdge + tpRR * slDist : farEdge - tpRR * slDist;" in VIRT_W and
-      "double farEdge = isLong ? MathMax(block.top, block.bottom) : MathMin(block.top, block.bottom);" in VIRT_W)
+# The virtual-fire commit no longer re-derives a TP: v5.63 deleted both the
+# field and the projection it fed. What must survive is that the fire still
+# reclaims entry / SL / rrUnit from the descriptor it actually sent.
+check("CheckVirtualTriggers no longer re-derives a TP (v5.63)",
+      "localTP" not in VIRT_W and "farEdge" not in VIRT_W)
+check("the virtual fire still reclaims entry and SL from the descriptor",
+      "block.localEntry = vo.triggerPrice;" in VIRT_W and
+      "block.localSL = vo.stopLoss;" in VIRT_W)
 check("the retired trigger-anchored projection is gone from the OrderManager",
       "vo.triggerPrice + slDist" not in (OM_C or "") and
       "vo.triggerPrice - slDist" not in (OM_C or ""))

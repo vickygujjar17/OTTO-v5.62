@@ -55,7 +55,6 @@ BUILD = os.path.join(ROOT, "_tools", "build_check.ps1")
 
 ALL_FILES = ["otto.mq5", "COttoOrderManager.mqh", "COttoTradeManager.mqh",
              "COttoRiskManager.mqh", "COttoBlockManager.mqh", "COttoJournal.mqh",
-             "COttoNewsFilter.mqh", "COttoCorrelationFilter.mqh",
              "COttoMarketStructure.mqh", "CHighTableAuditor.mqh",
              "OttoDefines.mqh"]
 
@@ -203,7 +202,7 @@ check("the new group is numbered [10]",
 check("the group header pins the introducing release",
       re.search(r'\[10\]\s+HIGH TABLE AUDITOR\s+\u2014\s+v\d+\.\d+', DEFS_T) is not None)
 check("group [10] is declared after group [9]",
-      0 < DEFS_T.find("[9] CURRENCY VECTOR") < DEFS_T.find("[10] HIGH TABLE"))
+      0 < DEFS_T.find("[9] RETIRED VECTOR ENGINE") < DEFS_T.find("[10] HIGH TABLE"))
 
 
 # ----------------------------------------------------------------------
@@ -337,8 +336,11 @@ check("build_check.ps1 declares the new module in ottoNames",
 check("build_check.ps1 lists the new module 3 times (names/expected/modules)",
       BUILD_T.count('"CHighTableAuditor"') == 3,
       "found %d" % BUILD_T.count('"CHighTableAuditor"'))
-check("the staging-tree expectation counts 11 OTTO sources",
-      "all 11 OTTO sources" in BUILD_T)
+check("the staging-tree expectation counts 9 OTTO sources",
+      # v5.63: was 11. COttoNewsFilter and COttoCorrelationFilter are deleted
+      # with the auxiliary veto layer, and build_check.ps1 must say so -- a gate
+      # still expecting 11 would abort on the correct tree.
+      "all 9 OTTO sources" in BUILD_T)
 
 
 

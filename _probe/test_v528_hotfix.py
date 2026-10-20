@@ -35,7 +35,6 @@ DEFS = os.path.join(ROOT, "OttoDefines.mqh")
 
 ALL_FILES = ["otto.mq5", "COttoOrderManager.mqh", "COttoTradeManager.mqh",
              "COttoRiskManager.mqh", "COttoBlockManager.mqh", "COttoJournal.mqh",
-             "COttoNewsFilter.mqh", "COttoCorrelationFilter.mqh",
              "COttoMarketStructure.mqh", "OttoDefines.mqh"]
 
 
@@ -335,18 +334,15 @@ if b5:
 print("\n-- Order manager guards --")
 
 sweep = func_body(OM_T, r"void\s+CancelOpposingConsensusOrders\s*\(void\)")
-check("CancelOpposingConsensusOrders located", sweep is not None)
-if sweep is not None:
-    body = sweep
-    check("consensus sweep is symbol-scoped",
-          re.search(r"OrderGetString\(ORDER_SYMBOL\)\s*!=\s*m_symbol", body) is not None)
-    check("consensus sweep still applies the magic filter",
-          "ORDER_MAGIC) != MagicNumber" in body)
-    check("consensus test is still the global portfolio one",
-          "IsConsensusOpposed(" in body)
-    check("sweep honours InpCancelOpposingPendings",
-          "InpCancelOpposingPendings" in body)
-    check("sweep no longer re-reads the row symbol", "string sym = OrderGetString" not in body)
+check("CancelOpposingConsensusOrders is RETIRED (v5.63)", sweep is None)
+# The v5.28/v5.40 invariants this block used to assert (symbol scoping, magic
+# filter, global consensus test, InpCancelOpposingPendings honour) are moot
+# because the whole method is gone with COttoCorrelationFilter. What must hold
+# now is that nothing reintroduces a portfolio-consensus cancel path.
+check("no consensus cancel survives anywhere in the order manager",
+      "IsConsensusOpposed" not in OM_T and
+      "GetPairConsensus" not in OM_T and
+      "InpCancelOpposingPendings" not in OM_T)
 
 check("no CancelQuorumOpposingOrders exists (never did)", "CancelQuorum" not in OM_T)
 

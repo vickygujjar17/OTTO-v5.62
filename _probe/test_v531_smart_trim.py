@@ -55,7 +55,7 @@ DEFS = os.path.join(ROOT, "OttoDefines.mqh")
 
 ALL_FILES = ["otto.mq5", "COttoOrderManager.mqh", "COttoTradeManager.mqh",
              "COttoRiskManager.mqh", "COttoBlockManager.mqh", "COttoJournal.mqh",
-             "CHighTableAuditor.mqh", "COttoNewsFilter.mqh", "COttoCorrelationFilter.mqh",
+             "CHighTableAuditor.mqh",
              "COttoMarketStructure.mqh", "OttoDefines.mqh"]
 
 
@@ -145,40 +145,31 @@ for f in ALL_FILES:
 check("no hardcoded <n> * slDist risk projection remains", not hardcoded,
       ", ".join(hardcoded))
 
-check("order manager falls back to 1.0 when InpMaxRR <= 0",
-      re.search(r"double\s+tpRR\s*=\s*\(InpMaxRR\s*>\s*0\.0\)\s*\?\s*InpMaxRR"
-                r"\s*:\s*1\.0\s*;", OM_C) is not None)
-check("order manager projects the take-profit from tpRR * slDist on the FAR edge",
-      re.search(r"double\s+farEdge\s*=\s*isLong\s*"
-                r"\?\s*MathMax\(block\.top,\s*block\.bottom\)\s*"
-                r":\s*MathMin\(block\.top,\s*block\.bottom\)\s*;", OM_C) is not None and
-      re.search(r"double\s+takeProfit\s*=\s*isLong\s*"
-                r"\?\s*farEdge\s*\+\s*tpRR\s*\*\s*slDist", OM_C) is not None and
-      re.search(r":\s*farEdge\s*-\s*tpRR\s*\*\s*slDist\s*;", OM_C) is not None)
-check("order manager stores the projection as block.localTP",
-      re.search(r"block\.localTP\s*=\s*takeProfit\s*;", OM_C) is not None)
+check("ORDER MANAGER: the Front-Run TP projection is RETIRED (v5.63)",
+      # v5.63 deleted block.localTP and the InpMaxRR projection that fed the
+      # Front-Run veto from the order path. The order path must no longer
+      # derive a target at all -- no TP is transmitted (request.tp is 0).
+      re.search(r"double\s+tpRR\s*=", OM_C) is None and
+      "block.localTP" not in OM_C.replace("// v5.63: block.localTP is GONE.", ""),
+      "an InpMaxRR projection still exists on the order path")
 check("order manager still records block.rrUnit = slDist",
       re.search(r"block\.rrUnit\s*=\s*slDist\s*;", OM_C) is not None)
 
-# Both block-manager passes (deletion pass + the OnTick re-check) must use the
-# same input, or one of them decides against a target the other never sends.
+# Both block-manager passes (deletion pass + the OnTick re-check) used to read
+# the SAME InpMaxRR input. v5.63 removed both passes with the auxiliary veto
+# layer, so the surviving invariant is that NO Front-Run projection remains.
 bm_sites = re.findall(r"double\s+tpRR\s*=\s*\(InpMaxRR\s*>\s*0\.0\)\s*\?\s*InpMaxRR"
                       r"\s*:\s*1\.0\s*;", BM_C)
-check("both block-manager front-run passes read InpMaxRR", len(bm_sites) == 2,
-      "found %d site(s)" % len(bm_sites))
-check("block-manager front-run projects from tpRR * calcSLDist on the FAR edge",
-      re.search(r"double\s+farEdge\s*=\s*isLong\s*"
-                r"\?\s*MathMax\(b\.top,\s*b\.bottom\)\s*"
-                r":\s*MathMin\(b\.top,\s*b\.bottom\)\s*;", BM_C) is not None and
-      re.search(r"double\s+target\s*=\s*isLong\s*"
-                r"\?\s*farEdge\s*\+\s*tpRR\s*\*\s*calcSLDist", BM_C) is not None and
-      re.search(r":\s*farEdge\s*-\s*tpRR\s*\*\s*calcSLDist\s*;", BM_C) is not None)
-check("front-run prefers the exact sent TP once the order is live",
-      BM_C.count("target = b.localTP;") == 2,
-      "found %d" % BM_C.count("target = b.localTP;"))
-check("OttoDefines documents InpMaxRR as the Front-Run/TP projection",
-      "InpMaxRR target hit before entry" in DEFS_T and
-      "InpMaxRR projection (used ONLY for Front-Run Veto)" in DEFS_T)
+check("BLOCK MANAGER: no Front-Run projection remains (v5.63)",
+      len(bm_sites) == 0, "found %d site(s)" % len(bm_sites))
+check("the BlockManager no longer projects a target or reads block.localTP",
+      "b.localTP" not in BM_C and "double target" not in BM_C)
+check("InpMaxRR is no longer labelled a Front-Run/veto projection",
+      # The retired wording ("Front-Run / TP projection") must not appear on the
+      # input's own declaration. It CAN still appear inside the v5.63 tombstone
+      # comments that explain the removal -- hence the line-scoped test.
+      re.search(r"input\s+double\s+InpMaxRR\s*=[^;]*;\s*//[^\n]*Front-Run",
+                DEFS_T) is None)
 
 
 # ----------------------------------------------------------------------

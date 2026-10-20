@@ -33,7 +33,6 @@ REAL = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 PROBE = os.path.join("_probe", "test_v52x_pyramid.py")
 FILES = ["otto.mq5", "COttoOrderManager.mqh", "COttoTradeManager.mqh",
          "COttoRiskManager.mqh", "COttoBlockManager.mqh", "COttoJournal.mqh",
-         "COttoNewsFilter.mqh", "COttoCorrelationFilter.mqh",
          "COttoMarketStructure.mqh", "OttoDefines.mqh"]
 
 HALF_RISK_MARK = "// --- HALF-RISK (HOISTED, v5.32) ---"

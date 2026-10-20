@@ -35,7 +35,6 @@ DEFS = os.path.join(ROOT, "OttoDefines.mqh")
 # The 10 files that must all carry the 5.27 stamp.
 ALL_FILES = ["otto.mq5", "COttoOrderManager.mqh", "COttoTradeManager.mqh",
              "COttoRiskManager.mqh", "COttoBlockManager.mqh", "COttoJournal.mqh",
-             "COttoNewsFilter.mqh", "COttoCorrelationFilter.mqh",
              "COttoMarketStructure.mqh", "OttoDefines.mqh"]
 
 
