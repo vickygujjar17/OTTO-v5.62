@@ -1,0 +1,191 @@
+565: release — version stamp only; the veto purge and the crossing guard are re-verified, not re-implemented
+
+RATIONALE
+
+  This release changes NO behaviour. It bumps the stamp 5.64 -> 5.65 and
+  records that the two changes requested for it were ALREADY SHIPPED: the
+  auxiliary veto purge landed in v5.63 and the entry-validity price-crossing
+  guard landed in v5.64. Re-implementing either would have been a duplicate.
+
+  The request was verified against the TREE rather than against its own
+  documentation, because the purge deliberately left TOMBSTONES in place: the
+  comments and the retired probes still NAME VETO_FRONTRUN, VETO_STALE, the
+  deleted modules, and so on. A raw substring search therefore reports the
+  documentation of the purge as if it were the purge failing. Every "is it
+  gone" check below runs on comment-stripped text, and every "is the input
+  really dead" check runs the input name against stripped code.
+
+  Deleting the RETIRED inputs was considered and REJECTED, deliberately:
+  they are unread no-ops, and removing them would make every existing .set
+  file fail with an unknown-parameter error. They stay declared, documented
+  as RETIRED, and carry no readers.
+
+SOURCE
+
+  NOTHING. No .mq5 or .mqh file changed semantically. The only edits in the
+  commit are the 20 version literals:
+
+    #property version "5.64" -> "5.65"                (otto.mq5 + 8 .mqh)
+    Pine Script Master Build Port (v5.64)  -> (v5.65) [otto.mq5 banner]
+    OTTO EA v5.64 ...                      -> v5.65   [otto.mq5 startup Print]
+    #property description "OTTO v5.64 ..." -> v5.65   [OttoDefines]
+    input group "[2]  STRUCTURAL VETOES <em-dash> v5.64"              -> v5.65
+    input group "[7]  RETIRED NEWS SHIELD <em-dash> v5.64"            -> v5.65
+    input group "[9]  RETIRED VECTOR ENGINE <em-dash> v5.64"          -> v5.65
+    input group "[10] HIGH TABLE AUDITOR <em-dash> v5.64"             -> v5.65
+    input group "[11] MANUAL TRADE ADOPTION <em-dash> v5.64"          -> v5.65
+    input group "[12] RETIRED VETO REVERSAL CONVERSIONS <em-dash> v5.64" -> v5.65
+    README "Current base: v5.64" -> v5.65
+
+  Evidence that the diff is stamp-only (not merely intended to be):
+
+      git diff --stat   -> 10 files, 20 insertions, 20 deletions
+      every +/- line contains a 5.64 or 5.65 literal; non-version
+      changed lines = 0
+
+  -- CLAUSE 1 (purge) VERIFIED ALREADY DONE, v5.63 -------------------------
+
+  Comment-stripped search over all 9 shipped sources:
+
+      VETO_FRONTRUN / VETO_STALE / VETO_NEARMISS / VETO_MOMENTUM /
+      VETO_FVG / VETO_CORRELATION / VETO_NEWS                    ABSENT
+      g_newsFilter / g_correlationFilter / IsNewsBlackout        ABSENT
+      COttoNewsFilter.mqh / COttoCorrelationFilter.mqh           DELETED
+      (tree is otto.mq5 + 8 .mqh, not 10)
+
+  ENUM_VETO_REASON is exactly five enumerators:
+
+      VETO_NONE, VETO_SIZING, VETO_NO_SEPARATION, VETO_BROKEN, VETO_FLIPPED
+
+  The surviving live veto WRITES are structural only, which is the requested
+  end state:
+
+      VETO_BROKEN   COttoBlockManager:625, COttoOrderManager:2622, :2848
+      VETO_FLIPPED  COttoBlockManager:612, :1110
+      VETO_SIZING / VETO_NO_SEPARATION -- zone-FORMATION checks, not signal
+      filters; present before the purge too.
+
+  All 23 `input ... // RETIRED` rows in OttoDefines.mqh were checked against
+  stripped code: 23/23 have NO reader. They are genuine no-ops, not silently
+  disabled gates.
+
+  -- CLAUSE 2 (crossing guard) VERIFIED ALREADY DONE, v5.64 -----------------
+
+  IsEntryCrossed(), COttoOrderManager.mqh:237:
+
+      return isLong ? (GetAsk() >= entryPrice) : (GetBid() <= entryPrice);
+
+  This is the EXACT NEGATION of the virtual trigger test at line 2769
+  (`isLong ? (ask < triggerPrice) : (bid > triggerPrice)`), evaluated on the
+  same price side, so the arm-time answer and the fire-time answer cannot
+  disagree by a spread.
+
+  Wiring is at line 924, and the ORDER of the two clauses is load-bearing:
+
+      if(InpEntryStyle != ENTRY_MIDPOINT && IsEntryCrossed(block, entryPrice))
+
+  It runs AHEAD of GetPriceBoundaryBuffer(), i.e. before the hybrid router
+  chooses physical vs virtual. For ENTRY_FRONT_EDGE, "priceValid" (legal to
+  REST) already implies "crossed", so a guard placed inside the virtual
+  branch only would have let the router REST a chasing limit below market --
+  precisely the case the guard exists to refuse. Ahead of the router, a
+  crossed setup can become neither a chase limit nor an instant virtual fire.
+
+  On a hit the block is LATCHED (hasPlacedOrder = true, persisted through
+  SetBlockAt): the setup is SPENT, not deferred, so PlaceOrdersForArmedBlocks
+  does not re-test it every tick. It logs its own reason, ENTRY ALREADY
+  CROSSED, and deliberately does NOT set isVetoed -- the ZONE is still
+  structurally valid, only this setup is stale.
+
+  TWO DEVIATIONS FROM THE LITERAL REQUEST, intentional and stated here
+  rather than left to be discovered:
+
+    1. The guard is scoped InpEntryStyle != ENTRY_MIDPOINT. A midpoint entry
+       sits INSIDE the zone and is therefore behind the market by
+       construction, so an unscoped test is TRUE on every healthy midpoint
+       setup and would retire that style outright (zero trades).
+    2. The reversal and pyramid paths stay guard-EXEMPT. OpenReversalPosition()
+       and AddPyramidTranche() both enter at the live GetAsk()/GetBid() and
+       never price off CalcEntryPrice(), so the guard would be true on every
+       call and would retire SAR flips and scale-ins. Both exemptions are
+       documented at their call sites in the source; neither was applied
+       silently.
+
+PROBES
+
+  No probe was added or edited: this release adds no logic to pin. The
+  existing suite was re-run to prove the stamp move broke nothing.
+
+    test_v564_pullback.py     51 / 51   (crossing guard + twin geometry)
+    test_v563_noveto.py      138 / 138  (the auxiliary layer is gone)
+
+  Full census: 25 GREEN / 4 RED across 29 probes. The four reds are EXACTLY
+  the pre-existing set at EXACTLY the same counts as the baseline measured in
+  this same tree before the purge:
+
+      test_v528_hotfix      53/64
+      test_v531_smart_trim  12/35
+      test_v532_hightable  125/135
+      test_v543_session     27/29
+
+  Zero probes moved GREEN -> RED.
+
+GATES
+
+  * _bump_version.py 5.65 -- applied ONCE, with the target spelled out. The
+    bare form advances one minor by itself; passing the target makes the call
+    idempotent, so a re-run is a verified no-op rather than a second bump.
+    Output: "changed 20 line(s)", then its own census gate: "no v5.64 literal
+    remains in the shipped sources or docs".
+  * _vercensus.py -- all 10 files at 5.65, no file left behind.
+  * build_check.ps1 -NoDeploy -- 0 errors, 0 warnings (10770 ms, X64 Regular).
+    GATE PASSED, headers verified from the staging tree.
+  * scan_encoding.ps1 -- exit 0. Every shipped source valid UTF-8, bom=none,
+    bareLF=0.
+  * Em-dash bytes re-verified AFTER the rewrite, because the bump edits lines
+    that themselves contain em-dashes (the input-group labels). OttoDefines.mqh
+    holds 26 occurrences of e2 80 94; double-encoded c3 8e c2 94 = 0; stray
+    c2 94 = 0; no BOM; 0 bare CR; 0 bare LF. All six versioned group labels
+    keep exactly one intact em-dash, e.g. "[2] STRUCTURAL VETOES <em-dash>
+    v5.65 (geometry only)". The mojibake `git diff` shows in a PowerShell
+    console (Greek/Cyrillic glyphs) is console rendering only, not the file.
+
+  PROCESS NOTE, recorded because it touched this tree: the bump script was
+  first invoked in its BARE form while inspecting its output, which advanced
+  the tree twice (5.64 -> 5.66) instead of previewing. It has no --dry-run.
+  The mutation was contained -- git diff showed 0 non-version lines -- and was
+  reverted with `git checkout -- .` before this bump was applied, so no 5.66
+  literal survives anywhere. The final bump used the explicit target instead.
+
+NOT PROVEN HERE
+
+  Behaviour. Nothing about the STRATEGY changed in this release, so the v5.64
+  open questions are inherited, not resolved:
+
+    1. The stop still lands 0.5*ATR INSIDE the zone whenever ATR <
+       2*blockHeight, i.e. for most real zones (slDist stayed blockHeight +
+       0.5*ATR while the entry offset is blockHeight + 1.0*ATR). Unmeasured.
+    2. Trade frequency still falls, because a crossed setup is refused rather
+       than armed. Magnitude unmeasured.
+    3. ROUTE A (resting broker limit) is unreachable for ENTRY_FRONT_EDGE, so
+       the virtual engine has no physical fallback in the default config.
+    4. Broker STOPS_LEVEL interaction remains unverified on a live terminal.
+
+  In addition, for THIS release:
+
+    5. The 23 RETIRED inputs are unread but still DECLARED. An .set file that
+       sets them loads fine and does nothing -- correct, but silent. No test
+       asserts a retired input can never be wired back up; the 23/23
+       no-reader check is a point-in-time measurement, not a gate.
+    6. No Strategy Tester run accompanies this commit. The compile gate proves
+       the tree BUILDS; the probes are static source analysis.
+
+ROLLBACK
+
+  pre-commit : git checkout -- .
+  post-commit: git reset --soft HEAD~1
+
+  `git checkout -- .` is safe and COMPLETE here precisely because the entire
+  diff is version literals -- unlike v5.64, there is no semantic edit that a
+  partial restore could leave half-applied. Restoring only SOME of the ten
+  files would leave the tree stamping two releases, so restore all of them.
