@@ -4,7 +4,7 @@
 //|              OTTO EA — exact Pine v4.70 execution port           |
 //+------------------------------------------------------------------+
 #property copyright "OTTO EA - Goat Funded Trader (GFT) Master Build"
-#property version   "5.63"
+#property version   "5.64"
 
 #ifndef __OTTO_ORDER_MANAGER__
 #define __OTTO_ORDER_MANAGER__
@@ -209,6 +209,36 @@ private:
       double freezePts = (double)SymbolInfoInteger(m_symbol, SYMBOL_TRADE_FREEZE_LEVEL);
       if(point <= 0.0) point = _Point;
       return MathMax(stopsPts, freezePts) * point + point;
+     }
+
+   //+------------------------------------------------------------------+
+   //| v5.64 — CROSSING GUARD (Near-Edge Pullback entry)                |
+   //|                                                                  |
+   //| The v5.64 entry sits one full ATR BEYOND the far edge the        |
+   //| breakout crosses (see CalcEntryPrice), so at arm time the market |
+   //| is normally SHORT of it and the trigger is a genuine break-out   |
+   //| cross. A setup whose price has ALREADY run through that entry is |
+   //| therefore stale: the move the geometry was waiting for happened  |
+   //| without this order, and the only fill left is a chase at market. |
+   //|                                                                  |
+   //| This predicate is deliberately the EXACT NEGATION of the virtual |
+   //| trigger test in CheckVirtualTriggers():                         |
+   //|   triggers : isLong ? (ask < triggerPrice) : (bid > triggerPrice)|
+   //|   crossed  : isLong ? (ask >= entryPrice)  : (bid <= entryPrice) |
+   //| so "crossed" means precisely "that virtual arm would fire on     |
+   //| this very tick". It is checked at ARM time, before any order is  |
+   //| dispatched, which is the only place the distinction still       |
+   //| exists -- once armed, the trigger cannot tell an intended cross  |
+   //| from a stale gap.                                                |
+   //|                                                                  |
+   //| Side selection matches the trigger convention (ask for a LONG,   |
+   //| bid for a SHORT) so the two cannot disagree by one spread.        |
+   //+------------------------------------------------------------------+
+   bool                    IsEntryCrossed(const SSniperBlock &block, double entryPrice)
+     {
+      if(entryPrice <= 0.0) return true;   // no geometry -> nothing to wait for
+      bool isLong = (GetDirectionForBlock(block) == DIR_LONG);
+      return isLong ? (GetAsk() >= entryPrice) : (GetBid() <= entryPrice);
      }
 
    //+------------------------------------------------------------------+
@@ -504,6 +534,16 @@ private:
       // The order type must FOLLOW the mapped direction, not the zone.
       // Deriving it independently from block.type would emit a BUY_LIMIT
       // while the direction said SHORT. Kept coherent here for every caller.
+      //
+      // v5.64 -- STILL A LIMIT, deliberately. The Near-Edge Pullback entry is
+      // 1.0*ATR beyond the far edge, i.e. on the far side of the market from
+      // a resting limit, so ROUTE A can never place one for a FRONT_EDGE
+      // setup (priceValid is false exactly then) and the virtual cross is the
+      // only live path. Switching these to BUY_STOP/SELL_STOP would make the
+      // physical route reachable again, but that changes the execution model
+      // rather than the geometry, so it is NOT bundled here -- see the v5.64
+      // commit note. A MIDPOINT setup is unaffected either way: its entry is
+      // always on the limit side, and this returns the shipping limit.
       return (GetDirectionForBlock(block) == DIR_LONG) ? ORDER_TYPE_BUY_LIMIT
                                                        : ORDER_TYPE_SELL_LIMIT;
      }
@@ -634,40 +674,61 @@ private:
 
    //+------------------------------------------------------------------+
    //| Entry price per Pine entry_style (Midpoint / Front Edge)        |
-   //| ENTRY_FRONT_EDGE: EXTREME FRONT-RUNNING ANTICIPATION. The entry |
-   //| sits 0.5*ATR BEYOND the FAR edge the breakout crosses (b.top for|
-   //| a LONG, b.bottom for a SHORT), so at arm time price is still    |
-   //| short of it and the trigger is a genuine STOP cross, not a      |
-   //| resting limit.                                                  |
-   //|                                                                 |
-   //| slDist = blockHeight + 0.5*ATR and the far edge is one          |
-   //| blockHeight past the near edge, so the mapped entry collapses   |
-   //| to exactly 0.5*ATR past the FAR edge:                           |
-   //|   LONG : block.bottom + slDist = block.top    + 0.5*ATR         |
-   //|   SHORT: block.top    - slDist = block.bottom - 0.5*ATR         |
-   //| The SL then lands on the OPPOSITE edge, a full slDist back      |
-   //| (block.bottom for the LONG, block.top for the SHORT), so        |
-   //| entry<->SL stays exactly slDist and the risk distance is        |
-   //| unchanged by the anticipation entry -- the entry/SL cluster     |
-   //| simply translates by 0.5*ATR in the breakout direction.         |
-   //| FIX (v5.57): the TP PROJECTION does NOT follow the entry; it is |
-   //| anchored on the FAR edge (see PlaceOrArmOrder) so the Front-Run |
-   //| veto keeps the strictness of every pre-anticipation build. Twin |
-   //| of COttoBlockManager::BlockEntryPrice(); they must stay         |
-   //| identical or the Front-Run veto would judge a different price   |
-   //| from the order's.                                               |
+   //| ENTRY_FRONT_EDGE: NEAR-EDGE PULLBACK (v5.64). The entry offset is|
+   //| measured from the NEAR edge -- the boundary the market is already |
+   //| clear of -- and is one full (blockHeight + 1.0*ATR) beyond it:    |
+   //|   LONG : block.bottom + blockHeight + 1.0*ATR = block.top + 1.0*ATR
+   //|   SHORT: block.top    - blockHeight - 1.0*ATR = block.bottom - 1.0*ATR
+   //| The far edge is exactly one blockHeight past the near edge, so the |
+   //| entry lands a clean 1.0*ATR BEYOND the far edge the breakout       |
+   //| crosses: the v5.57 anticipation entry with a widened coefficient,  |
+   //| one further 0.5*ATR out than every build before this one.          |
+   //|                                                                  |
+   //| RETIRED (v5.64) -- the v5.57 collapse onto 0.5*ATR past the far   |
+   //| edge is GONE. It reused slDist as the entry offset, which is why   |
+   //| the SL landed exactly ON the near edge. The offset now carries its |
+   //| own coefficient and is DECOUPLED from slDist, which is unchanged   |
+   //| at blockHeight + 0.5*ATR (CalcSLDistance, untouched):              |
+   //|   LONG : stop = entry - slDist = block.bottom + 0.5*ATR            |
+   //|   SHORT: stop = entry + slDist = block.top    - 0.5*ATR            |
+   //| entry<->SL stays exactly slDist, so the RISK DISTANCE is identical |
+   //| to every prior build; only the entry/SL cluster translates. The    |
+   //| stop consequently sits 0.5*ATR INSIDE the zone when ATR <          |
+   //| 2*blockHeight (on the near edge at equality, outside it on a zone  |
+   //| thin relative to ATR). See CalcSLDistance() for why that is not a  |
+   //| reason to move the stop back out.                                  |
+   //|                                                                  |
+   //| Because the entry sits further out than the market at arm time, a  |
+   //| setup price has ALREADY traded through is stale: IsEntryCrossed()  |
+   //| rejects it (the crossing guard), and CheckVirtualTriggers() fires  |
+   //| on the inverted cross.                                             |
+   //|                                                                  |
+   //| Twin of COttoBlockManager::BlockEntryPrice(); they must stay       |
+   //| identical character for character, or a reader of one would judge  |
+   //| a different entry from the order's.                                |
    //+------------------------------------------------------------------+
    double                  CalcEntryPrice(const SSniperBlock &block, double atr)
      {
       if(InpEntryStyle == ENTRY_MIDPOINT)
          return block.midpoint;
-      double slDist = block.blockHeight + (0.5 * atr);
-      return (GetDirectionForBlock(block) == DIR_LONG) ? (block.bottom + slDist)
-                                                       : (block.top - slDist);
+      double pullback = block.blockHeight + (1.0 * atr);
+      return (GetDirectionForBlock(block) == DIR_LONG) ? (block.bottom + pullback)
+                                                       : (block.top - pullback);
      }
 
    //+------------------------------------------------------------------+
    //| SL distance: b_height + 0.5*ATR (Pine sl_dist)                  |
+   //|                                                                 |
+   //| v5.64: UNCHANGED, and deliberately so. The entry offset grew to  |
+   //| blockHeight + 1.0*ATR while this stays blockHeight + 0.5*ATR, so |
+   //| the two are now INDEPENDENT numbers -- the risk per unit is the  |
+   //| one quantity this release must not move. The consequence is that |
+   //| the stop (entry -/+ slDist) now lands 0.5*ATR INSIDE the zone    |
+   //| whenever ATR < 2*blockHeight, instead of on the near edge as it  |
+   //| did when the entry offset happened to equal slDist. That is the  |
+   //| accepted trade-off, not an oversight: restoring the stop onto an |
+   //| edge would require lengthening THIS distance, which would change |
+   //| every lot size, every 1R trail milestone and every basket seed.  |
    //+------------------------------------------------------------------+
    double                  CalcSLDistance(const SSniperBlock &block, double atr)
      {
@@ -689,11 +750,14 @@ private:
    //| CheckPendingOrderFills(); a virtual arm fires its MARKET leg in  |
    //| CheckVirtualTriggers() on the cross.                             |
    //+------------------------------------------------------------------+
-   // FIX (v5.57) FRONT-RUNNING ANTICIPATION: with InpEntryStyle = ENTRY_FRONT_EDGE
-   // the entry sits 0.5*ATR beyond the FAR edge the breakout crosses (a
-   // buy-stop above resistance / a sell-stop below support), so the VIRTUAL
-   // arm is the ordinary path and a physical rest is the rare stale-price
-   // case. Either way the trigger is a MARKET deal when the level is crossed.
+   // FIX (v5.57) FRONT-RUNNING ANTICIPATION, widened by v5.64: with InpEntryStyle
+   // = ENTRY_FRONT_EDGE the entry sits a full 1.0*ATR beyond the FAR edge the
+   // breakout crosses (a buy-stop above resistance / a sell-stop below support),
+   // so the VIRTUAL arm carries every such setup -- a crossed one is refused
+   // outright, a live one waits for the cross -- and the physical route is left
+   // to ENTRY_MIDPOINT entries. Either way the trigger is a MARKET deal when the
+   // level is crossed, and a setup already through its entry is rejected by the
+   // v5.64 crossing guard before it is armed at all.
    bool                    PlaceOrArmOrder(int blockIndex, SSniperBlock &block)
      {
       if(block.isVetoed || block.isTriggered || block.hasPlacedOrder)
@@ -740,9 +804,12 @@ private:
       // no Phase 2 to shift, so the entry is the single mapped edge from
       // CalcEntryPrice() and InpShiftReversalEntry is a declared no-op.
       // slDist stays hoisted here: SL/TP below are entry-relative and reuse it.
-      // FIX (v5.57) — hand CalcSLDistance() the SAME shift-1 ATR the block-side
-      // projection (blockHeight + 0.5*atrNow) uses, so the entry, the stop,
-      // the target and the veto all resolve one risk distance.
+      // FIX (v5.57) — hand CalcSLDistance() the SAME shift-1 ATR the entry was
+      // built from, so the entry and the stop resolve one risk distance.
+      // v5.64 -- the entry offset is now blockHeight + 1.0*ATR while this stays
+      // blockHeight + 0.5*ATR (see CalcSLDistance), so the two share the ATR
+      // but NOT the coefficient. Keep it that way: the risk distance is the
+      // quantity every lot size and trail milestone is derived from.
       double slDist     = CalcSLDistance(block, atr);
 
       // v5.40 — the duplicate shield and the physical-vs-virtual routing both
@@ -809,18 +876,64 @@ private:
       // zone the resting form is illegal, so we ARM an in-memory virtual order
       // and let CheckVirtualTriggers() fire it as a MARKET deal on the cross.
       //
-      // FRONT-RUNNING ANTICIPATION NOTE. FIX (v5.57). With InpEntryStyle =
-      // ENTRY_FRONT_EDGE the entry sits 0.5*ATR beyond the FAR edge -- a
-      // Resistance LONG at b.bottom+slDist (= b.top+0.5*ATR), a Support SHORT
-      // at b.top-slDist (= b.bottom-0.5*ATR) -- so the trigger is STOP-style
-      // (breakout): the market must still RISE to a LONG entry and FALL to a
-      // SHORT entry, while the SL sits a full slDist back on the opposite
-      // edge. At arm time price has closed clear of the NEAR edge, i.e. it is
-      // still short of the entry, so the limit test below is FALSE: the setup
-      // arms VIRTUALLY and CheckVirtualTriggers() fires a MARKET deal on the
-      // cross. That inverted cross is the ordinary path, not a fallback; a
-      // physical rest is only ever used when a stale armed price happens to
-      // sit on the limit side of a moved market.
+      // FRONT-RUNNING ANTICIPATION NOTE. FIX (v5.57), widened by v5.64. With
+      // InpEntryStyle = ENTRY_FRONT_EDGE the entry sits a full 1.0*ATR beyond
+      // the FAR edge -- a Resistance LONG at b.bottom + blockHeight + 1.0*ATR
+      // (= b.top + 1.0*ATR), a Support SHORT at b.top - blockHeight - 1.0*ATR
+      // (= b.bottom - 1.0*ATR) -- so the trigger is STOP-style (breakout): the
+      // market must still RISE to a LONG entry and FALL to a SHORT entry. The
+      // SL is one slDist (blockHeight + 0.5*ATR) back, which lands INSIDE the
+      // zone when ATR < 2*blockHeight: risk is unchanged, the entry/SL cluster
+      // simply sits further out. At arm time price has closed clear of the
+      // NEAR edge, i.e. it is still short of the entry, so the limit test
+      // below is FALSE: the setup arms VIRTUALLY and CheckVirtualTriggers()
+      // fires a MARKET deal on the cross. That inverted cross is the ordinary
+      // path, not a fallback -- and with the crossing guard in place it is now
+      // the ONLY reachable path for this style: a FRONT_EDGE entry that is
+      // legal to REST (entry below the bid for a LONG) is by definition one the
+      // market has already run through, so the guard refuses it above and
+      // ROUTE A is left to ENTRY_MIDPOINT setups, whose entry genuinely sits
+      // behind the market.
+      //
+      // v5.64 CROSSING GUARD -- the entry is now further out than the market
+      // at arm time, so a setup the market has ALREADY traded through is
+      // stale: the breakout this geometry was waiting for happened without
+      // this order, and the only fill left is a chase at market.
+      //
+      // TWO scoping conditions, both load-bearing:
+      //
+      //   1. InpEntryStyle != ENTRY_MIDPOINT. The guard only makes sense for
+      //      the CROSS-TRIGGER geometry. A midpoint entry sits INSIDE the zone
+      //      and therefore behind the market by construction, so the test
+      //      would be true on every healthy midpoint setup and would retire
+      //      that style entirely. Skipping it there leaves ENTRY_MIDPOINT
+      //      behaving exactly as it did in v5.63.
+      //
+      //   2. Checked BEFORE the router, not inside its virtual branch. For a
+      //      FRONT_EDGE setup "priceValid" (legal to REST) already implies
+      //      "crossed" -- a LONG entry 1.0*ATR above the far edge can only sit
+      //      below the bid once the market has run through it -- so testing
+      //      only in the virtual branch would let the router REST a chasing
+      //      limit below market for precisely the setups this guard exists to
+      //      refuse. Ahead of the router, a crossed setup cannot become either
+      //      a chase limit or an instant virtual fire.
+      //
+      // On a hit the block is LATCHED (hasPlacedOrder) rather than deferred:
+      // the setup is spent, not waiting, so PlaceOrdersForArmedBlocks() must
+      // not re-test it on every tick.
+      if(InpEntryStyle != ENTRY_MIDPOINT && IsEntryCrossed(block, entryPrice))
+        {
+         block.hasPlacedOrder = true;
+         m_blockManager.SetBlockAt(blockIndex, block);
+         if(EnableLogging)
+            Print("[OrderManager] ENTRY ALREADY CROSSED for ", block.tradeId,
+                  " (entry=", DoubleToString(entryPrice, _Digits),
+                  (isLong ? " ask=" : " bid="),
+                  DoubleToString(isLong ? GetAsk() : GetBid(), _Digits),
+                  ") — stale setup, skipped.");
+         return false;
+        }
+
       double boundary = GetPriceBoundaryBuffer();
       bool   priceValid;
       if(isLong)
@@ -1404,6 +1517,15 @@ private:
    //+------------------------------------------------------------------+
    //| Opens a market reversal position using the block's levels       |
    //+------------------------------------------------------------------+
+   // v5.64 -- the crossing guard is deliberately NOT applied here, and that is
+   // a decision rather than an omission. This path NEVER prices off
+   // CalcEntryPrice: it enters at the live ask/bid the moment the opposite
+   // basket is confirmed flat, so there is no resting entry for the market to
+   // have "already run through" and IsEntryCrossed() would be true on every
+   // call, retiring the SAR flip entirely. Its stop still comes from the
+   // block's own slDist (via CalcSLDistance, unchanged by v5.64), so the 1R
+   // basis this basket is seeded with stays exactly what every other entry
+   // path would have used.
    bool                    OpenReversalPosition(SSniperBlock &targetBlock)
      {
       // The reversal target's direction is the MAPPED direction -- the same
@@ -2582,12 +2704,19 @@ public:
    //| memory engine whose ARM half is PlaceOrArmOrder().               |
    //|                                                                  |
    //| The cross test mirrors Pine's own strategy fill logic and is     |
-   //| INVERTED for the front-running anticipation entry FIX (v5.57):   |
-   //| trigger now sits BEYOND the far edge, so a LONG fires once the   |
-   //| market has traded UP to/through its trigger and a SHORT once it  |
-   //| has traded DOWN to/through it - a gap past the level still       |
-   //| triggers. FIX (v5.57): under the far-edge entry the level sat on |
-   //| the limit side of price and the test ran the other way.)         |
+   //| INVERTED for the front-running anticipation entry (FIX v5.57,    |
+   //| widened by v5.64): the trigger sits BEYOND the far edge, so a    |
+   //| LONG fires once the market has traded UP to/through its trigger  |
+   //| and a SHORT once it has traded DOWN to/through it - a gap past   |
+   //| the level still triggers.                                        |
+   //|                                                                  |
+   //| v5.64 ROLE: this remains the PRIMARY armed-to-filled path, not a |
+   //| fallback. The crossing guard in PlaceOrArmOrder() does not       |
+   //| replace it -- the guard only refuses to ARM a setup whose price  |
+   //| has already gone through the entry (a stale geometry), so every  |
+   //| setup that does arm is still waiting for THIS cross. The guard   |
+   //| and this test are exact negations AT ARM TIME, which is why a    |
+   //| freshly armed order can never fire on the tick it was armed.     |
    //+------------------------------------------------------------------+
    void              CheckVirtualTriggers(void)
      {
@@ -2632,7 +2761,11 @@ public:
          // FIX (v5.57) for the front-running anticipation entry: the trigger sits
          // BEYOND the far edge, so a LONG fires once the market has traded UP
          // to (or through) the level, a SHORT once it has traded DOWN to it -
-         // a gap past it still fires.
+         // a gap past it still fires. v5.64 widens that offset to 1.0*ATR (see
+         // CalcEntryPrice) but does NOT change the test: this stays the primary
+         // armed-to-filled path, and PlaceOrArmOrder()'s IsEntryCrossed() guard
+         // is its exact negation at arm time, so an order never arms already
+         // crossed and therefore never fires on the tick it armed.
          if(isLong ? (ask < vo.triggerPrice) : (bid > vo.triggerPrice))
             continue;
 

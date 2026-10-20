@@ -1,0 +1,283 @@
+564: feature — Near-Edge Pullback entry geometry + price-crossing guard
+
+RATIONALE
+
+  v5.63 left the entry offset and the stop distance as the SAME expression:
+
+      entry = nearEdge +/- slDist            (slDist = blockHeight + 0.5*ATR)
+      stop  = entry  -/+ slDist
+
+  Because the far edge is exactly one blockHeight past the near edge, that
+  collapsed to "entry 0.5*ATR past the far edge, stop exactly ON the near
+  edge". Two DIFFERENT concepts -- how far out to enter, and how much risk to
+  take -- were welded to one number, so the entry could not be widened without
+  silently widening the stop, its lot size, every 1R trail milestone and every
+  basket seed.
+
+  v5.64 separates them:
+
+      entry = nearEdge +/- (blockHeight + 1.0*ATR)    <- its OWN coefficient
+      stop  = entry  -/+ slDist                       <- UNCHANGED risk
+
+  The entry now sits a full 1.0*ATR beyond the far edge the breakout crosses
+  (was 0.5*ATR), i.e. one further 0.5*ATR out than any previous build. Risk
+  per unit is IDENTICAL to v5.63 by construction: entry<->stop is still
+  exactly slDist.
+
+  A setup the market has ALREADY run through is now stale rather than a
+  resting level: the move the geometry was waiting for happened without this
+  order, so the only fill left is a chase at market. v5.64 refuses to arm
+  those (IsEntryCrossed), which is the price-crossing guard.
+
+SOURCE
+
+  COttoBlockManager.mqh -- BlockEntryPrice() geometry + header rewritten
+    double slDist = b.blockHeight + (0.5 * atr);
+    return ... ? (b.bottom + slDist) : (b.top - slDist);
+  becomes
+    double pullback = b.blockHeight + (1.0 * atr);
+    return ... ? (b.bottom + pullback) : (b.top - pullback);
+
+    The v5.57 "extreme front-run" comment block is retired in place: it
+    documented a collapse (entry 0.5*ATR past far edge, SL on the opposite
+    edge) that no longer holds. The replacement states the surviving identity
+    (offset collapses to 1.0*ATR past the far edge) AND the new consequence
+    (stop 0.5*ATR INSIDE the zone when ATR < 2*blockHeight), with an explicit
+    "do NOT restore the stop onto an edge" note, because restoring it requires
+    changing slDist -- the one number this release must not move.
+
+  COttoOrderManager.mqh -- CalcEntryPrice() rewritten to the SAME arithmetic
+    Twin contract kept character for character (the probe asserts it). The
+    rationale now says the pair must agree because a caller would judge a
+    different entry from the order's, and records that the pair is DORMANT
+    (its last reader, the Front-Run veto, was deleted in v5.63) -- which is
+    precisely why a divergence here would be silent.
+
+  COttoOrderManager.mqh -- CalcSLDistance() comments only, body untouched
+    Still blockHeight + 0.5*ATR. The header now explains that this is
+    deliberately INDEPENDENT of the entry offset and why lengthening it to
+    "fix" the stop-inside-zone case would change every lot size and milestone.
+
+  COttoOrderManager.mqh -- NEW IsEntryCrossed(block, entryPrice)
+    The exact negation of the virtual trigger test, on the same side
+    (ask for a LONG, bid for a SHORT) so the two cannot disagree by a spread:
+
+        triggers : isLong ? (ask < triggerPrice) : (bid > triggerPrice)
+        crossed  : isLong ? (ask >= entryPrice)  : (bid <= entryPrice)
+
+    Placed next to GetPriceBoundaryBuffer(). Returns true for entryPrice<=0
+    ("no geometry, nothing to wait for").
+
+  COttoOrderManager.mqh -- original GATE wiring, with two scoping conditions
+    Called from PlaceOrArmOrder() AFTER entryPrice/slDist are computed and
+    BEFORE the hybrid router. TWO conditions, both load-bearing:
+
+      1. InpEntryStyle != ENTRY_MIDPOINT. A midpoint entry sits INSIDE the
+         zone, hence behind the market by construction; the bare test would be
+         true on every healthy midpoint setup and retire that style wholesale.
+      2. BEFORE the router, not inside its virtual branch. For a FRONT_EDGE
+         setup, priceValid (legal to REST) ALREADY implies crossed -- a LONG
+         entry 1.0*ATR above the far edge can only sit below the bid once the
+         market has run through it. Testing only in the virtual branch would
+         let the router REST a chasing limit below market for exactly the
+         setups the guard exists to refuse.
+
+    On a hit the block is LATCHED (hasPlacedOrder = true + SetBlockAt) and NOT
+    vetoed: the setup is SPENT, not invalid. Without the latch
+    PlaceOrdersForArmedBlocks() would re-log the rejection every tick.
+
+    CONSEQUENCE, accepted and documented in place: with the guard live, ROUTE A
+    (physical resting limit) is unreachable for ENTRY_FRONT_EDGE. That is
+    correct rather than a regression -- a FRONT_EDGE entry that is legal to
+    rest is by definition one the market already ran through -- and the virtual
+    cross was already the ordinary path for this style. ROUTE A remains live
+    for ENTRY_MIDPOINT.
+
+  COttoOrderManager.mqh -- GetOrderTypeForBlock() UNCHANGED (still LIMIT)
+    Deliberately not switched to BUY_STOP/SELL_STOP. That would re-open the
+    physical route for the pullback entry, but it changes the EXECUTION MODEL,
+    not the geometry, so it is not bundled into a geometry release. The
+    reasoning is recorded in the function so the next reader does not "fix"
+    it by accident.
+
+  COttoOrderManager.mqh -- CheckVirtualTriggers() header rewritten
+    The inverted cross test is UNCHANGED (the FIX (v5.57) predicate is
+    character-for-character the same). The header now states the v5.64 ROLE
+    explicitly: still the PRIMARY armed-to-filled path, not a fallback. The
+    guard only refuses to ARM a crossed setup, so every setup that does arm is
+    still waiting for this cross, and a freshly armed order can never fire on
+    the tick it armed.
+
+  COttoOrderManager.mqh -- OpenReversalPosition() documented as guard-exempt
+    NOT silently edited. The SAR flip enters at the live ask/bid and never
+    prices off CalcEntryPrice, so IsEntryCrossed() would be true on every call
+    and would retire the reversal entirely. The exemption is stated in the
+    source with that exact reasoning; its stop still comes from CalcSLDistance
+    and so keeps the unchanged 1R basis.
+
+  COttoJournal.mqh -- 4 actionDesc literals + 1 trigger label rewritten
+    "Buy at Top Edge + 0.5*ATR | SL at Bottom Edge" and its SHORT mirror (in
+    BOTH LogSetupArmed and LogEntry) described a stop on the far edge, which is
+    now false. They read "Near Edge +/- blockHeight + 1.0*ATR | SL 1R back".
+    The arm header's trigger row now names the Near-Edge Pullback entry.
+
+  COttoJournal.mqh -- ProjectedTarget() anchor KEPT on the far edge (Decision B)
+    The projection is not re-anchored on blk.localEntry. It is operator context
+    and is never traded off, and the far-edge anchor keeps every printed row
+    comparable with pre-v5.57 journals. The consequence is now stated in the
+    header instead of hidden: realized R measured from the ENTRY is
+    InpMaxRR - ATR/slDist (3.00 for a 1.0-high zone at ATR 2.0, down from 3.50;
+    2.40 for 0.5-high at ATR 4.0). Re-anchoring would print a flat InpMaxRR for
+    every zone and conceal exactly that degradation.
+
+  OttoDefines.mqh -- ENTRY_FRONT_EDGE comment rewritten, ENUM NAME KEPT
+    Same convention as the v5.63 "RETIRED (no-op), kept for .set
+    compatibility" rows: renaming the enumerator would reject existing .set
+    files. The comment now describes the pullback geometry, states that risk
+    per unit is unchanged, and points at IsEntryCrossed.
+
+  _tools/_bump_version.py -- census() FIXED (was the blocking gate defect)
+    census() was a bare `old in line` substring test, so it flagged every
+    historical "v5.63:" provenance annotation the bump pass is explicitly built
+    to PRESERVE -- 54 hits on this bump, ZERO of which was a version stamp. The
+    gate therefore could not pass on any real bump. It now asks the only
+    question that matters: would build_patterns() rewrite this line? Those
+    patterns are anchored on operator-visible prefixes (`#property version`,
+    the file banners, `#property description`, the versioned input-group
+    labels, README's `Current base:`), which a comment can never satisfy. The
+    'FIX (' exemption is retained.
+
+    Verified both ways: census(5.63) = 0 and census(5.64) = 20 (the stamp
+    lines) after the bump, and re-injecting a stale README stamp still fires
+    (1 hit). Without this fix the documented `_bump_version.py 5.64` gate
+    command exits 1 on a correct tree.
+
+PROBES
+
+  NEW  _probe/test_v564_pullback.py -- 51 checks, ALL PASSING.
+       1. COEFFICIENT INDEPENDENCE -- the entry offset is
+          blockHeight + 1.0*ATR spelled identically in BOTH twins; neither
+          reads slDist; slDist is still blockHeight + 0.5*ATR; the twins are
+          arithmetically identical after canonicalising the var name and the
+          direction call; the stop is still entry -/+ slDist and rrUnit is
+          still seeded from slDist.
+       2. THE GUARD -- present, same-side as the trigger, the exact negation of
+          the virtual cross, wired from PlaceOrArmOrder, scoped away from
+          ENTRY_MIDPOINT, positioned BEFORE the router, latching
+          hasPlacedOrder + persisting it, logging under its own reason, never
+          vetoing, and documented as exempt on the SAR reversal path.
+       3. THE NUMERIC TABLE -- 4 rows asserted individually, plus
+          entry<->stop == slDist, the far-edge reward identity, and the two
+          retired invariants (stop no longer on the near edge; realized R now
+          3.0R not 3.5R for the head case).
+       4. DOCUMENTATION -- the twin rationale survives in both files, the
+          v5.57 collapse is marked RETIRED, the stop-inside-zone consequence is
+          stated at the SL definition, the enum keeps its NAME but documents the
+          new geometry, the router states ROUTE A is now MIDPOINT-only, the
+          order type is still a LIMIT and says why, and no source still calls
+          this an "extreme front-run".
+       5. VERSION STAMPS.
+
+       MUTATION-VERIFIED: flipping the OrderManager offset back to 0.5*ATR
+       fails 2 checks (offset + twin identity); dropping the ENTRY_MIDPOINT
+       scoping fails 1 (the style would be retired). Both files restored and
+       re-verified GREEN afterwards.
+
+  MIGRATED  _probe/test_v557_frontrun.py  87 -> 93 checks, now 93/93.
+       Sections 1, 2, 5, 6, 8, 9 tested the cross-trigger model and the ATR
+       shift sync, which STILL SHIP -- untouched. Converted:
+         section 3  the "one full slDist from the near edge" body pin became
+                    the pullback expression + a check that the offset no longer
+                    reads slDist
+         section 7  the geometry transcriber now builds entry from
+                    nearEdge + (bh + 1.0*ATR) and stop from entry - slDist; the
+                    head case moved 3.5R -> 3.0R, the reward identity became
+                    InpMaxRR - ATR/slDist, and the realized-R bound TIGHTENED
+                    from (InpMaxRR-1, InpMaxRR] to (InpMaxRR-2, InpMaxRR]
+                    (correct: ATR/slDist < 2 always, since slDist > 0.5*ATR).
+                    Added the 4-row table and the two stop-position pins.
+         section 10 the 4 journal actionDesc pins moved to the Near Edge
+                    wording, plus a negative pin that the old edge wording is
+                    gone.
+       The twin-rationale anchor was re-pointed at "identical character for
+       character" because the two files phrase the sentence differently and the
+       old phrase was Front-Run-specific.
+
+  CONVERTED BY INSPECTION (no edit needed, still GREEN)
+    test_v530_price_guard.py 44/44 -- pins the tick snap and the boundary
+      buffer, not the geometry; the guard is an ADDITION, so every
+      "the retired live-price guard must stay absent" check still holds.
+    test_v540_hybrid.py 41/41 -- pins the router's structure; the guard is a
+      new predicate ahead of it and changes none of the asserted literals.
+    test_v563_noveto.py 138/138 -- pins the veto purge; unaffected.
+
+GATES
+
+  * build_check.ps1 -NoDeploy : 0 errors / 0 warnings, GATE PASSED, headers
+    verified from the staging tree (9 OTTO sources). Run TWICE -- once after the
+    geometry/guard edits and again after the _bump_version.py fix.
+  * _bump_version.py 5.64 : 20 stamp lines rewritten; census clean; re-run is a
+    no-op ("5.64 is already the current release"). census(5.63)=0,
+    census(5.64)=20.
+  * _vercensus.py : all 10 files at 5.64, no file left behind.
+  * Probe census: 25 GREEN / 4 RED across 29 probes.
+    The four reds are EXACTLY the pre-existing set, at EXACTLY the same
+    counts as the pre-change baseline measured in this same working tree
+    before the first edit:
+      test_v528_hotfix      53/64  (53/64 before)
+      test_v531_smart_trim  12/35  (12/35 before)
+      test_v532_hightable  125/135 (125/135 before)
+      test_v543_session     27/29  (27/29 before)
+    Zero probes moved RED and zero moved GREEN->RED unintentionally; the only
+    count that changed is test_v557 (87 -> 93 checks, all passing) plus the new
+    test_v564.
+  * Encoding: strict CRLF preserved in all four edited sources -- 0 bare LF and
+    0 bare CR measured per file (COttoOrderManager 3662 CRLF, COttoBlockManager
+    1128, COttoJournal 404, OttoDefines 525).
+
+NOT PROVEN HERE
+
+  Behaviour. No Strategy Tester run accompanies this commit. The probe set is
+  static source analysis; the compile gate proves the tree BUILDS, not that the
+  strategy performs. Four consequences are UNMEASURED:
+
+    1. THE STOP NOW SITS INSIDE THE ZONE for the common case. With
+       slDist = blockHeight + 0.5*ATR and the entry 1.0*ATR past the far edge,
+       the stop lands 0.5*ATR inside the zone whenever ATR < 2*blockHeight --
+       i.e. for most real zones. It is no longer protected by a zone boundary,
+       so a wick that respects the structural level can now take the trade out.
+       This is the direct, accepted cost of clause 1 and it is DOCUMENTED AT THE
+       SL DEFINITION rather than left to be discovered. If it proves costly in
+       the tester, the fix is a decision about slDist (and therefore about lot
+       sizing), NOT a quiet re-anchor of the stop.
+    2. TRADE FREQUENCY WILL FALL. A setup whose entry is already crossed is now
+       refused instead of armed. On a fast instrument the entry sits one full
+       ATR beyond the far edge, so a zone that gets run through before the next
+       tick is skipped entirely. The magnitude is unmeasured.
+    3. ROUTE A IS NOW DEAD FOR THE SHIPPED STYLE. ENTRY_FRONT_EDGE can never
+       satisfy priceValid, so every live entry is a virtual arm fired by
+       CheckVirtualTriggers(). That is intentional, but it means a
+       comment/structure regression in the virtual engine now has no physical
+       fallback behind it for the default configuration.
+    4. Broker STOPS_LEVEL interaction is untested. The stop is 0.5*ATR inside
+       the zone and the entry 1.0*ATR outside it; on a broker with a wide
+       STOPS_LEVEL the SL->entry distance is unchanged (still slDist) so
+       ValidateStopDistance should be unaffected, but no live terminal verified
+       it.
+
+ROLLBACK
+
+  pre-commit : git checkout -- COttoBlockManager.mqh COttoOrderManager.mqh
+                             COttoJournal.mqh OttoDefines.mqh
+                             otto.mq5 README.md
+                             CHighTableAuditor.mqh COttoMarketStructure.mqh
+                             COttoRiskManager.mqh COttoTradeManager.mqh
+                             _tools/_bump_version.py
+                             _probe/test_v557_frontrun.py
+               del _probe\test_v564_pullback.py _tools\_commit564.txt
+  post-commit: git reset --soft HEAD~1
+
+  NOTE the rollback must restore the version stamps too, which is why all ten
+  files are listed even though only four changed semantically: the bump touched
+  `#property version` in every one of them, and a partial rollback would leave
+  the tree stamping two releases.

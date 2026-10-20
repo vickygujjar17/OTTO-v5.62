@@ -4,7 +4,7 @@
 //|            OTTO EA — dynamic file editing, cancellation, email       |
 //+------------------------------------------------------------------+
 #property copyright "OTTO EA - Goat Funded Trader (GFT) Master Build"
-#property version   "5.63"
+#property version   "5.64"
 
 #ifndef __OTTO_JOURNAL__
 #define __OTTO_JOURNAL__
@@ -39,6 +39,20 @@ private:
    //| farEdge is the edge the breakout crosses -- so this reproduces |
    //| the deleted localTP arithmetic rather than inventing a new    |
    //| convention. Returns 0 when the block carries no geometry yet.  |
+   //|                                                              |
+   //| v5.64 DELIBERATELY DID NOT RE-ANCHOR THIS ON THE ENTRY. The    |
+   //| entry moved out to farEdge + 1.0*ATR (was 0.5*ATR), so the     |
+   //| realized multiple measured FROM THE ENTRY is now               |
+   //|                                                              |
+   //|   R = InpMaxRR - ATR / rrUnit                                 |
+   //|                                                              |
+   //| (3.00 on a 1.0-high zone at ATR 2.0, 2.40 on a 0.5-high zone  |
+   //| at ATR 4.0). Anchoring on blk.localEntry would report a flat  |
+   //| InpMaxRR for every zone and would hide exactly that           |
+   //| degradation. The far-edge anchor is kept so this row stays    |
+   //| COMPARABLE with every journal printed before v5.64 -- it is    |
+   //| operator context, never an exit level, and no code path       |
+   //| trades off it.                                                |
    //+--------------------------------------------------------------+
    double            ProjectedTarget(const SSniperBlock &blk, ENUM_TRADE_DIRECTION dir)
      {
@@ -204,14 +218,14 @@ public:
       W("  Setup ID          : " + tradeId);
       W("  Logic             : " + phase);
       W("  Execution Mode    : " + execMode);
-      W("  Trigger Price     : " + FmtPrice(entryPrice) + " (Front-Edge entry: far edge +/- 0.5*ATR)");
+      W("  Trigger Price     : " + FmtPrice(entryPrice) + " (Near-Edge Pullback entry: near edge +/- (blockHeight + 1.0*ATR))");
       W("  Initial SL        : " + FmtPrice(slPrice) + " | 1R = " + FmtPrice(blk.rrUnit));
       W("  Volume            : " + DoubleToString(lotSize,2));
       string actionDesc = "";
       if(btype == BLOCK_SUPPORT)
-         actionDesc = "SUPPORT (Continuation Breakdown / Sell at Bottom Edge - 0.5*ATR | SL at Top Edge)";
+         actionDesc = "SUPPORT (Continuation Breakdown / Sell at Near Edge - blockHeight - 1.0*ATR | SL 1R back)";
       else
-         actionDesc = "RESISTANCE (Continuation Breakout / Buy at Top Edge + 0.5*ATR | SL at Bottom Edge)";
+         actionDesc = "RESISTANCE (Continuation Breakout / Buy at Near Edge + blockHeight + 1.0*ATR | SL 1R back)";
       W("  Trade             : " + actionDesc);
       W("  Block Top/Bottom  : Top=" + FmtPrice(blk.top) + " | Bottom=" + FmtPrice(blk.bottom) + " | Mid=" + FmtPrice(blk.midpoint) + " | Height=" + FmtPrice(blk.blockHeight));
       W("  Projected Target  : " + FmtPrice(ProjectedTarget(blk, dir)) + " (InpMaxRR projection, far edge +/- RR x 1R; context only - exits are trail-based)");
@@ -250,9 +264,9 @@ public:
       W("  S/R Block:");
       string actionDesc = "";
       if(blk.type == BLOCK_SUPPORT)
-         actionDesc = "SUPPORT (Continuation Breakdown / Sell at Bottom Edge - 0.5*ATR | SL at Top Edge)";
+         actionDesc = "SUPPORT (Continuation Breakdown / Sell at Near Edge - blockHeight - 1.0*ATR | SL 1R back)";
       else
-         actionDesc = "RESISTANCE (Continuation Breakout / Buy at Top Edge + 0.5*ATR | SL at Bottom Edge)";
+         actionDesc = "RESISTANCE (Continuation Breakout / Buy at Near Edge + blockHeight + 1.0*ATR | SL 1R back)";
       W("    - Logic     : " + actionDesc);
       W("    - Zone      : Top=" + FmtPrice(blk.top) + " | Bottom=" + FmtPrice(blk.bottom) + " | Mid=" + FmtPrice(blk.midpoint) + " | Height=" + FmtPrice(blk.blockHeight));
       if(blk.wick1Time > 0 && blk.wick2Time > 0)

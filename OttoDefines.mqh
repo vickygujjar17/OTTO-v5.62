@@ -1,12 +1,12 @@
 //+------------------------------------------------------------------+
 //|                                                   OttoDefines.mqh |
-//|             OTTO EA v5.63 — 28-Pair Institutional Master Build |
+//|             OTTO EA v5.64 — 28-Pair Institutional Master Build |
 //|                 Central Definitions / Enums / Input Parameters    |
 //|         Exact MQL5 port of Pine Script "prop_guard_tester.pine"   |
 //+------------------------------------------------------------------+
 #property copyright "OTTO EA - Goat Funded Trader (GFT) Master Build"
-#property version   "5.63"
-#property description "OTTO v5.63 — Goat Funded Trader (GFT) Master Build (Wick1+Wick2 | Separation | Sizing | Broken | Flipped — structural vetoes only)"
+#property version   "5.64"
+#property description "OTTO v5.64 — Goat Funded Trader (GFT) Master Build (Wick1+Wick2 | Separation | Sizing | Broken | Flipped — structural vetoes only)"
 
 #ifndef __OTTO_DEFINES__
 #define __OTTO_DEFINES__
@@ -84,14 +84,20 @@ enum ENUM_VETO_REASON
 enum ENUM_ENTRY_STYLE
   {
    ENTRY_MIDPOINT  = 0,     // entry = (top+bottom)/2
-   ENTRY_FRONT_EDGE = 1     // EXTREME FRONT-RUNNING ANTICIPATION. FIX (v5.57):
-                            //   entry 0.5*ATR BEYOND the far edge the breakout
-                            //   crosses, = b.top + 0.5*ATR for a Resistance LONG
-                            //   and b.bottom - 0.5*ATR for a Support SHORT --
-                            //   a full slDist back the SL lands on the opposite
-                            //   edge (b.bottom / b.top), so entry<->SL stays
-                            //   exactly slDist. The trigger is STOP-style and
-                            //   fires on the cross (see CheckVirtualTriggers).
+   ENTRY_FRONT_EDGE = 1     // NEAR-EDGE PULLBACK (v5.64). The name is retained
+                            //   for .set compatibility; the geometry it selects
+                            //   is no longer the v5.57 "extreme front-run".
+                            //   entry = near edge +/- (blockHeight + 1.0*ATR),
+                            //   i.e. a full 1.0*ATR BEYOND the far edge the
+                            //   breakout crosses (= b.top + 1.0*ATR for a
+                            //   Resistance LONG, b.bottom - 1.0*ATR for a
+                            //   Support SHORT). slDist is UNCHANGED at
+                            //   blockHeight + 0.5*ATR, so the stop lands
+                            //   0.5*ATR inside the zone when ATR < 2*height
+                            //   and risk per unit is identical to v5.63.
+                            //   The trigger fires on the cross; a setup whose
+                            //   price has already passed the entry is rejected
+                            //   by the crossing guard (IsEntryCrossed).
   };
 
 // Pine sim_sentiment simulation input
@@ -251,7 +257,7 @@ input int      MaxBlockDistance  = 150;        // Max bars between W1 and W2 for
 input int      LookbackBars      = 300;        // Bars the pivot engine may reference
 
 input group "══════════════════════════════════════════════════"
-input group "  [2] STRUCTURAL VETOES — v5.63 (geometry only)"
+input group "  [2] STRUCTURAL VETOES — v5.64 (geometry only)"
 input group "══════════════════════════════════════════════════"
 // v5.63 — AUXILIARY VETO PURGE. This group used to hold six discretion
 // filters (FVG, Momentum, Front-Run, Stale 45D, Near-Miss 6D) plus the
@@ -403,7 +409,7 @@ input int      RetryDelayMs       = 500;      // Retry delay (milliseconds)
 input int      MaxSpreadPoints    = 50;       // Max spread (points) for new entries
 
 input group "══════════════════════════════════════════════════"
-input group "  [7] RETIRED NEWS SHIELD — v5.63 (no-ops)"
+input group "  [7] RETIRED NEWS SHIELD — v5.64 (no-ops)"
 input group "══════════════════════════════════════════════════"
 // v5.63 — NEWS SHIELD PURGE. COttoNewsFilter.mqh is deleted: the calendar
 // blackout never fired in production (EnableNewsFilter defaulted to false and
@@ -429,7 +435,7 @@ input double   SafetyDailyDDLimit  = 3.0;     // Soft breach: pause new orders a
 input double   SafetyTotalDDLimit  = 5.0;     // Hard breach: close all + halt at this % (Trailing)
 
 input group "══════════════════════════════════════════════════"
-input group "  [9] RETIRED VECTOR ENGINE — v5.63 (no-ops)"
+input group "  [9] RETIRED VECTOR ENGINE — v5.64 (no-ops)"
 input group "══════════════════════════════════════════════════"
 // v5.63 — CURRENCY-VECTOR PURGE. COttoCorrelationFilter.mqh is deleted. It
 // carried two distinct things, and BOTH were part of the auxiliary veto layer:
@@ -452,7 +458,7 @@ input int      InpAnchorTF           = PERIOD_H1;  // RETIRED (v5.63) - no-op, k
 input bool     InpCancelOpposingPendings = true; // RETIRED (v5.63) - no-op, kept for .set compatibility
 
 input group "══════════════════════════════════════════════════"
-input group "  [10] HIGH TABLE AUDITOR — v5.63"
+input group "  [10] HIGH TABLE AUDITOR — v5.64"
 input group "══════════════════════════════════════════════════"
 // Decoupled watchdog: audits live state on its OWN timer cadence rather
 // than inside OnTick, so a halted / paused / tick-starved trade loop can
@@ -462,7 +468,7 @@ input bool     InpEnableHighTable       = true;  // Enable High Table watchdog
 input int      InpHighTableAuditSeconds = 5;     // Audit cadence (seconds, >= 1)
 
 input group "══════════════════════════════════════════════════"
-input group "  [11] MANUAL TRADE ADOPTION — v5.63"
+input group "  [11] MANUAL TRADE ADOPTION — v5.64"
 input group "══════════════════════════════════════════════════"
 // Let this EA manage positions opened BY HAND on its own chart symbol.
 // A manual position is identified as a MAGIC-0 position on m_symbol: the
@@ -479,7 +485,7 @@ input int      InpManualNoSLWarnMinutes = 5;     // Re-warn cadence for a manual
 
 //+------------------------------------------------------------------+
 input group "══════════════════════════════════════════════════"
-input group "  [12] RETIRED VETO REVERSAL CONVERSIONS — v5.63"
+input group "  [12] RETIRED VETO REVERSAL CONVERSIONS — v5.64"
 input group "══════════════════════════════════════════════════"
 // v5.34 built five switches that let a vetoed Phase 1 setup be re-used as a
 // Phase 2 REVERSAL instead of being discarded.

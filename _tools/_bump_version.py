@@ -118,13 +118,23 @@ def bump(path, patterns):
 
 
 def census(old):
-    """Every surviving literal `old` in the shipped sources + docs.
+    """Every surviving operator-visible literal `old` in the shipped sources + docs.
 
-    Mirrors the bump() exemption above: a line carrying a historical
-    'FIX (vX)' annotation LEGITIMATELY names the release the fix landed in, so
-    it is not stale. Without this the guard fires on exactly the markers the
-    bump pass was written to preserve.
+    v5.64 FIX -- this used to be a bare `old in line` substring test, which
+    reported the very annotations the bump pass is built to PRESERVE. Every
+    release leaves dozens of '// v5.63: ...' provenance notes naming the
+    release a change landed in; a bare substring test flags all of them, so the
+    gate could never pass on a real bump (v5.63 -> v5.64 reported 54 hits, 0 of
+    which was a stamp). It now asks the ONLY question that matters: would
+    build_patterns() rewrite this line? Those patterns are anchored on the
+    specific human-facing prefixes (`#property version`, the file banners, the
+    '#property description' row, the versioned input-group labels, README's
+    'Current base:'), so a comment annotation can never satisfy one.
+
+    The 'FIX (' exemption is kept: a historical marker naming the release a fix
+    LANDED in is legitimate and must never be reported as stale.
     """
+    probes = build_patterns(old, "\x00STALE\x00") + build_doc_patterns(old, "\x00STALE\x00")
     hits = []
     for path in FILES + DOC_FILES:
         full = os.path.join(ROOT, path)
@@ -133,7 +143,12 @@ def census(old):
         for i, line in enumerate(io.open(full, encoding="utf-8",
                                          errors="replace", newline="").read()
                                  .split("\n"), 1):
-            if old in line and "FIX (" not in line:
+            if "FIX (" in line:
+                continue
+            rewritten = line
+            for pat, rep in probes:
+                rewritten = pat.sub(rep, rewritten)
+            if rewritten != line:
                 hits.append("%s:%d: %s" % (path, i, line.strip()))
     return hits
 

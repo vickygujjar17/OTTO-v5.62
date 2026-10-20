@@ -1,53 +1,56 @@
 """
 v5.57 static verification probe - FRONT-RUNNING ANTICIPATION ENTRY.
 
-v5.57 moves the entry, the stop and the take-profit onto an EXTREME
-FRONT-RUNNING ANTICIPATION model (entry = the zone edge plus one full stop
-distance, i.e. 0.5*ATR BEYOND the edge the breakout crosses) and moves the
-level the virtual engine waits on from a resting price to a MARKET cross.
-Three properties carry that change and NOT ONE of them is visible to the
-MQL5 compiler, because each is a runtime relationship between two files:
+v5.57 moved the entry onto an EXTREME FRONT-RUNNING ANTICIPATION model
+(entry = the zone edge plus one full stop distance, i.e. 0.5*ATR BEYOND the
+edge the breakout crosses) and moved the level the virtual engine waits on
+from a resting price to a MARKET cross.
 
-  1. ATR SHIFT SYNC. COttoBlockManager prices its Front-Run veto projection
-     from GetATRAtShift(1) -- the last CLOSED bar. COttoOrderManager must
-     price the matching entry / SL / TP / rrUnit from the SAME shift, or on
-     a live bar the order and the veto would be built from two different
-     ATRs and the veto would compare the market against a target the order
-     never had. The cached GetATR() refreshes from shift 0 (the FORMING
-     bar), so it may only ever be a FALLBACK: shift 1 first, GetATR()
-     second, and a hard abandon when neither is populated. GetATRAtShift()
-     itself had to move into the public section for the OrderManager call to
-     compile at all -- and the compiler cannot tell that the CALLER meant
-     the same shift the veto uses.
+v5.64 UPDATE -- the CROSS-TRIGGER MODEL IS UNCHANGED; only its scale moved.
+The entry offset is now blockHeight + 1.0*ATR measured from the NEAR edge
+(= 1.0*ATR beyond the far edge, was 0.5*ATR), while slDist is still
+blockHeight + 0.5*ATR. Three properties still carry the change and NOT ONE
+of them is visible to the MQL5 compiler, because each is a runtime
+relationship between two files:
+
+  1. ATR SHIFT SYNC. COttoBlockManager prices its entry projection from
+     GetATRAtShift(1) -- the last CLOSED bar. COttoOrderManager must price
+     the matching entry / SL / rrUnit from the SAME shift, or on a live bar
+     the two would be built from different ATRs. The cached GetATR()
+     refreshes from shift 0 (the FORMING bar), so it may only ever be a
+     FALLBACK: shift 1 first, GetATR() second, and a hard abandon when
+     neither is populated. GetATRAtShift() itself had to move into the
+     public section for the OrderManager call to compile at all -- and the
+     compiler cannot tell that the CALLER meant the same shift.
 
   2. THE INVERTED CROSS TEST. A front-run entry is armed BEYOND the far
      edge, so a LONG must fire once the market has traded UP TO (or through)
-     the level; v5.56 tested the opposite direction (a pullback DOWN through
-     a resting limit). The sign of that one comparison is the whole
+     the level; a resting-limit test would run the opposite way (a pullback
+     DOWN through the level). The sign of that one comparison is the whole
      difference between a market anticipation entry and a limit order, and
      it is invisible at compile time -- the block still arms either way.
+     v5.64 pairs it with the crossing guard, its exact negation at arm time,
+     so an order can never arm already crossed.
 
-  3. THE FAR-EDGE TARGET ANCHOR. slDist = blockHeight + 0.5*ATR, and the
-     anticipation entry maps a FURTHER 0.5*ATR past the far edge. The target
-     is deliberately measured from the FAR EDGE (block.top LONG /
-     block.bottom SHORT), not from the entry, so the projection reproduces
-     what every pre-anticipation build projected and the veto keeps its
-     strictness. Anchoring it on the entry instead would silently stretch
-     the target 0.5*ATR and veto setups that were never front-runs. The
-     consequence, pinned in section 7, is that the target is no longer a
+  3. THE FAR-EDGE TARGET ANCHOR. The journal's projected target is measured
+     from the FAR EDGE (block.top LONG / block.bottom SHORT), not from the
+     entry, so the printed row stays comparable with every pre-v5.57 build.
+     The consequence, pinned in section 7, is that the target is no longer a
      full InpMaxRR from the ENTRY: realized entry-anchored RR is
-     InpMaxRR - 0.5*ATR/slDist (e.g. 4.0 -> 3.5 on a 1.0-high zone at
-     ATR 2.0). That is intended, not a defect, and the invariant is asserted
-     so a future re-anchor has to be a deliberate act.
+     InpMaxRR - ATR/slDist (e.g. 4.0 -> 3.0 on a 1.0-high zone at ATR 2.0;
+     it was 3.5 under the v5.57 0.5*ATR offset). That is intended, not a
+     defect, and the invariant is asserted so a future re-anchor has to be a
+     deliberate act.
 
 WHAT THIS PROBE PINS. The ATR shift sync and its fallback in all three
 OrderManager price paths, the public visibility of GetATRAtShift(), the two
 entry twins' textual identity (COttoBlockManager::BlockEntryPrice() vs
 COttoOrderManager::CalcEntryPrice(), which MUST judge one price), the
 two-argument call sites and the retirement of the single-argument form, the
-far-edge projection in BOTH BlockManager passes, the inverted cross test
-plus the absence of the retired v5.56 predicate, the geometry identity
-behind the realization above, and the release stamps.
+1.0*ATR entry offset plus the UNCHANGED 0.5*ATR stop distance, the inverted
+cross test plus the absence of the retired v5.56 predicate, the geometry
+identity and full arithmetic table behind the realization above, and the
+release stamps.
 
 WHAT IT CANNOT PROVE. That the ATR cache slot is actually POPULATED on the
 tick that matters, and that the cross fires on the intended bar, are
@@ -295,8 +298,12 @@ check("the two entry twins are arithmetically identical",
 check("both twins honour ENTRY_MIDPOINT before the front-edge maths",
       "if(InpEntryStyle == ENTRY_MIDPOINT) return midpoint;" in BEP_BODY and
       "if(InpEntryStyle == ENTRY_MIDPOINT) return midpoint;" in CALC_BODY)
-check("the front-edge entry sits one full slDist from the near edge",
-      "return (Dir(x) == DIR_LONG) ? (bottom + slDist) : (top - slDist);" in BEP_BODY,
+check("the front-edge entry is one (blockHeight + 1.0*ATR) past the near edge",
+      "return (Dir(x) == DIR_LONG) ? (bottom + pullback) : (top - pullback);" in BEP_BODY,
+      BEP_BODY)
+check("the entry offset is blockHeight + 1.0*ATR (v5.64, was slDist)",
+      "double pullback = blockHeight + (1.0 * atr);" in BEP_BODY and
+      "slDist" not in BEP_BODY,
       BEP_BODY)
 
 # ----------------------------------------------------------------------
@@ -326,10 +333,11 @@ check("neither pass recalls a single-arg entry helper",
       "BlockEntryPrice(" not in BM_INTRA)
 
 # The entry geometry the far-edge anchor was derived FROM is untouched: the
-# anticipation entry still sits 0.5*ATR beyond the edge the breakout crosses.
+# anticipation entry still sits BEYOND the edge the breakout crosses, now a
+# full 1.0*ATR past it (v5.64 widened this from 0.5*ATR).
 check("the entry twins still agree on the anticipation geometry",
       "BlockEntryPrice(" in BM_RAW and "CalcEntryPrice(" in OM_RAW and
-      "block.bottom + slDist" in OM_RAW)
+      "block.bottom + pullback" in OM_RAW)
 
 # The OrderManager must no longer project the veto's target at all.
 PLACE_CANON = canon(OM_PLACE or "", "block")
@@ -406,11 +414,14 @@ def realized(bh, atr, rr):
     """Transcribe the shipped geometry with the near edge at 0.0.
 
     LONG is the whole story: DIR_SHORT is the mirror image, so one side
-    proves both. nearEdge=0, farEdge=bh, entry = nearEdge + slDist,
-    stop = nearEdge, tp = farEdge + InpMaxRR*slDist.
+    proves both. nearEdge=0, farEdge=bh,
+    entry = nearEdge + (bh + 1.0*atr)  [v5.64; was nearEdge + slDist],
+    stop  = entry - slDist,
+    tp    = farEdge + InpMaxRR*slDist  (journal projection, far-edge anchor).
     """
     sl = bh + 0.5 * atr
-    return (sl, 0.0, bh + rr * sl, sl)   # entry, stop, tp, slDist
+    entry = bh + 1.0 * atr
+    return (entry, entry - sl, bh + rr * sl, sl)   # entry, stop, tp, slDist
 
 
 CASES = [(1.0, 2.0, 4.0), (2.0, 1.0, 4.0), (1.0, 1.0, 2.0), (0.5, 4.0, 4.0)]
@@ -419,23 +430,58 @@ for bh, atr, rr in CASES:
     entry, stop, tp, sl = realized(bh, atr, rr)
     if abs(abs(entry - stop) - sl) > 1e-12:
         risk_ok = False                      # risk must never drift
-    if abs((tp - entry) - (rr - 0.5 * atr / sl) * sl) > 1e-12:
+    if abs((tp - entry) - (rr - atr / sl) * sl) > 1e-12:
         anchor_ok = False                    # the far-edge identity
     x = (tp - entry) / abs(entry - stop)
-    if not (rr - 1.0 < x <= rr):
+    # v5.64: the entry sits 1.0*ATR out while the stop is 0.5*ATR back, so the
+    # realized multiple is InpMaxRR - ATR/slDist. Because slDist = bh + 0.5*ATR
+    # > 0.5*ATR, the ratio ATR/slDist is always < 2, giving the tightened bound
+    # (InpMaxRR - 2, InpMaxRR]. The v5.57 bound was (InpMaxRR - 1, InpMaxRR]
+    # because the offset there was exactly 0.5*ATR; that no longer holds.
+    if not (rr - 2.0 < x <= rr):
         bound_ok = False
 
 check("the stop always sits exactly one slDist from the entry", risk_ok)
-check("reward from the ENTRY == (InpMaxRR - 0.5*ATR/slDist) * slDist",
-      anchor_ok)
-check("realized RR is bounded by (InpMaxRR - 1, InpMaxRR]", bound_ok)
+check("reward from the ENTRY == (InpMaxRR - ATR/slDist) * slDist", anchor_ok)
+check("realized RR is bounded by (InpMaxRR - 2, InpMaxRR]", bound_ok)
+
+# The v5.64 arithmetic table. Every row is the shipped expression evaluated
+# with the near edge at 0.0 and the far edge at blockHeight, so a change to
+# EITHER coefficient (1.0*ATR on the entry, 0.5*ATR on the stop) moves a row.
+# "stop" is reported in zone-relative terms: 0.0 = near edge, bh = far edge.
+TABLE = [
+    # bh,  atr, entry, stop,   where the stop lands
+    (1.0, 2.0,  3.00,  1.00,  "far"),      # ATR == 2*bh -> stop ON the far edge
+    (2.0, 1.0,  3.00,  0.50,  "inside"),   # ATR <  2*bh -> stop INSIDE the zone
+    (1.0, 1.0,  2.00,  0.50,  "inside"),
+    (0.5, 4.0,  4.50,  2.00,  "outside"),  # ATR >  2*bh -> stop past the zone
+]
+table_ok = True
+for bh, atr, want_entry, want_stop, where in TABLE:
+    entry, stop, tp, sl = realized(bh, atr, 4.0)
+    if abs(entry - want_entry) > 1e-12 or abs(stop - want_stop) > 1e-12:
+        table_ok = False
+    lands = ("far" if abs(stop - bh) < 1e-12 else
+             "inside" if 0.0 < stop < bh else
+             "outside" if stop > bh else "near")
+    if lands != where:
+        table_ok = False
+check("the v5.64 arithmetic table (entry / stop / stop-vs-zone) holds", table_ok)
 
 entry, stop, tp, sl = realized(1.0, 2.0, 4.0)
 HEAD = (tp - entry) / abs(entry - stop)
-check("the documented 1.0-high / ATR 2.0 / RR 4.0 zone realizes 3.5R",
-      abs(HEAD - 3.5) < 1e-12, "%.4fR" % HEAD)
-check("the target is NOT a full InpMaxRR from the anticipation entry",
+check("the documented 1.0-high / ATR 2.0 / RR 4.0 zone realizes 3.0R",
+      abs(HEAD - 3.0) < 1e-12, "%.4fR" % HEAD)
+check("the target is NOT a full InpMaxRR from the pullback entry",
       HEAD < 4.0)
+# The stop is 0.5*ATR inside the zone for ATR < 2*blockHeight -- the accepted
+# v5.64 consequence. Pinned so it cannot drift silently in EITHER direction.
+_ins = [realized(bh, atr, 4.0) for bh, atr in ((2.0, 1.0), (1.0, 1.0))]
+check("the stop sits 0.5*ATR inside the zone when ATR < 2*blockHeight",
+      all(abs(st - 0.5 * atr) < 1e-12 for (en, st, tp, sl), (bh, atr)
+          in zip(_ins, ((2.0, 1.0), (1.0, 1.0)))))
+check("the stop no longer lands on the near edge (the v5.57 invariant)",
+      all(st > 1e-12 for en, st, tp, sl in _ins))
 
 
 # ----------------------------------------------------------------------
@@ -443,9 +489,9 @@ check("the target is NOT a full InpMaxRR from the anticipation entry",
 # ----------------------------------------------------------------------
 print("\n-- 8. Configuration --")
 
-check("ENTRY_FRONT_EDGE is declared as the extreme-anticipation style",
+check("ENTRY_FRONT_EDGE is declared as the near-edge pullback style (v5.64)",
       "ENTRY_FRONT_EDGE" in DEFS_T and
-      "EXTREME FRONT-RUNNING ANTICIPATION" in DEFS_T)
+      "NEAR-EDGE PULLBACK (v5.64)" in DEFS_T)
 check("InpEntryStyle defaults to the front-edge entry",
       "InpEntryStyle = ENTRY_FRONT_EDGE" in DEFS_T)
 check("the OrderManager maps that style to the front-edge entry",
@@ -490,8 +536,8 @@ check("all %d shipped sources carry one common stamp" % len(ALL_FILES),
 check("the common stamp is v5.57 or later", rel_parts(STAMPS) >= (5, 57),
       "stamps=%s" % sorted(set(STAMPS)))
 check("the two-twin invariant is justified in BOTH files",
-      "the Front-Run veto would judge a different price" in BM_RAW and
-      "the Front-Run veto would judge a different price" in OM_RAW,
+      "identical character for character" in norm(BM_RAW) and
+      "identical character for character" in norm(OM_RAW),
       "the 'must stay identical' rationale is missing")
 check("the source states WHY the shift had to reach the OrderManager",
       "GetATRAtShift(1) -- the LAST CLOSED bar" in BM_RAW)
@@ -511,8 +557,16 @@ check("the startup banner names the current release",
 print("\n-- 10. Journal & wick geometry sync --")
 
 check("the journal names the CONTINUATION geometry, not the veto wording",
-      "Continuation Breakdown / Sell at Bottom Edge - 0.5*ATR | SL at Top Edge" in JRN_RAW and
-      "Continuation Breakout / Buy at Top Edge + 0.5*ATR | SL at Bottom Edge" in JRN_RAW)
+      "Continuation Breakdown / Sell at Near Edge - blockHeight - 1.0*ATR | SL 1R back" in JRN_RAW and
+      "Continuation Breakout / Buy at Near Edge + blockHeight + 1.0*ATR | SL 1R back" in JRN_RAW)
+check("the retired v5.58 'Top Edge / Bottom Edge' wording is gone",
+      "Buy at Top Edge + 0.5*ATR" not in JRN_RAW and
+      "Sell at Bottom Edge - 0.5*ATR" not in JRN_RAW and
+      "SL at Top Edge" not in JRN_RAW and
+      "SL at Bottom Edge" not in JRN_RAW)
+check("the journal trigger-price row names the Near-Edge Pullback entry",
+      "Near-Edge Pullback entry: near edge +/- (blockHeight + 1.0*ATR)" in JRN_RAW and
+      "Front-Edge entry: far edge +/- 0.5*ATR" not in JRN_RAW)
 check("the retired 'Aggressive' block wording is gone",
       "Aggressive" not in JRN_RAW)
 

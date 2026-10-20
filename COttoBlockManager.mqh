@@ -4,7 +4,7 @@
 //|              OTTO EA — exact Pine v4.70 block logic port          |
 //+------------------------------------------------------------------+
 #property copyright "OTTO EA - Goat Funded Trader (GFT) Master Build"
-#property version   "5.63"
+#property version   "5.64"
 
 #ifndef __OTTO_BLOCK_MANAGER__
 #define __OTTO_BLOCK_MANAGER__
@@ -133,39 +133,47 @@ private:
    //+------------------------------------------------------------------+
    //| BlockEntryPrice — Pine entry price for a block, honouring        |
    //| InpEntryStyle.                                                   |
-   // EXTREME FRONT-RUNNING ANTICIPATION. The entry sits 0.5*ATR BEYOND the
-   // FAR edge the breakout crosses (b.top for a LONG, b.bottom for a SHORT),
-   // so at arm time price is still short of it and the trigger is a genuine
-   // STOP cross rather than a resting limit.
+   // NEAR-EDGE PULLBACK (v5.64). The entry offset is measured from the NEAR
+   // edge -- the zone boundary the market is ALREADY clear of -- and is one
+   // full (blockHeight + 1.0*ATR) beyond it:
+   //   LONG : b.bottom + blockHeight + 1.0*ATR  = b.top    + 1.0*ATR
+   //   SHORT: b.top    - blockHeight - 1.0*ATR  = b.bottom - 1.0*ATR
+   // The right-hand form is the identity that matters: because the far edge is
+   // exactly one blockHeight past the near edge, the collapse leaves the entry
+   // a clean 1.0*ATR BEYOND the far edge the breakout crosses. That is the
+   // v5.57 anticipation entry with its ATR coefficient widened 0.5 -> 1.0, so
+   // the entry sits one further 0.5*ATR out than every build before this one.
    //
-   // slDist = blockHeight + 0.5*ATR and the far edge is one blockHeight past
-   // the near edge, so the mapped entry collapses to exactly 0.5*ATR past the
-   // FAR edge:
-   //   LONG : b.bottom + slDist = b.top    + 0.5*ATR
-   //   SHORT: b.top    - slDist = b.bottom - 0.5*ATR
-   // The SL then lands on the OPPOSITE edge of the zone, a full slDist back
-   // (b.bottom for the LONG, b.top for the SHORT), so entry<->SL stays exactly
-   // slDist and the risk distance is unchanged by the anticipation entry --
-   // the whole entry/SL cluster is simply translated by 0.5*ATR in the
-   // breakout direction, never a wider stop.
+   // RETIRED (v5.64) -- the v5.57 "extreme front-run" collapse is GONE. It
+   // reused slDist (blockHeight + 0.5*ATR) as the entry offset, so the entry
+   // sat only 0.5*ATR past the far edge and the SL landed exactly ON the
+   // near edge. The entry offset now has its OWN coefficient (1.0*ATR on top
+   // of the block height) and is decoupled from slDist, which stays
+   // blockHeight + 0.5*ATR. The stop therefore moves with the entry:
+   //   LONG : stop = entry - slDist = b.bottom + 0.5*ATR
+   //   SHORT: stop = entry + slDist = b.top    - 0.5*ATR
+   // so entry<->SL stays exactly slDist (risk per unit unchanged) but the
+   // stop now sits 0.5*ATR INSIDE the zone whenever ATR < 2*blockHeight, on
+   // the near edge when ATR == 2*blockHeight, and outside it on a zone thin
+   // relative to ATR. Do NOT "restore" the stop onto the far/near edge: with
+   // slDist fixed at blockHeight + 0.5*ATR, doing so would require changing
+   // the risk distance, which is the one number independent of this entry.
    //
-   // FIX (v5.57) -- the RR PROJECTION did NOT follow the entry out to the
-   // anticipation offset. The Front-Run veto still projects its target from
-   // the FAR edge, not from the entry: a LONG target = b.top + tpRR*slDist, a
-   // SHORT target = b.bottom - tpRR*slDist. Anchoring the projection to the
-   // translated entry would have stretched it a further 0.5*ATR past the far
-   // edge -- measurably harsher than every build before the anticipation
-   // entry, i.e. it would veto setups that were never front-runs. See the
-   // front-run block in ProcessBlocks() for the arithmetic.
+   // The entry now sits further out than the market at arm time, so a setup
+   // the market has ALREADY traded through is stale -- see
+   // COttoOrderManager::IsEntryCrossed() (the crossing guard) and the
+   // inverted cross in CheckVirtualTriggers().
    //
    // This is the exact twin of COttoOrderManager::CalcEntryPrice(); the two
-   // must stay identical or the Front-Run veto would judge a different price
-   // from the order's.
+   // must stay identical character for character, or a caller would judge a
+   // different entry from the order's. (The Front-Run veto was the last
+   // reader of this price and it is retired, so the pair is currently
+   // dormant -- the contract is kept for whoever reads it next.)
    double                  BlockEntryPrice(const SSniperBlock &b, double atr) const
      {
       if(InpEntryStyle == ENTRY_MIDPOINT) return b.midpoint;
-      double slDist = b.blockHeight + (0.5 * atr);
-      return (BlockDirection(b) == DIR_LONG) ? (b.bottom + slDist) : (b.top - slDist);
+      double pullback = b.blockHeight + (1.0 * atr);
+      return (BlockDirection(b) == DIR_LONG) ? (b.bottom + pullback) : (b.top - pullback);
      }
 
    //+------------------------------------------------------------------+
