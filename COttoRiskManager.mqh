@@ -4,7 +4,7 @@
 //|              OTTO EA — Institutional risk manager                |
 //+------------------------------------------------------------------+
 #property copyright "OTTO EA - Goat Funded Trader (GFT) Master Build"
-#property version   "5.67"
+#property version   "5.68"
 
 #ifndef __OTTO_RISK_MANAGER__
 #define __OTTO_RISK_MANAGER__
@@ -15,7 +15,8 @@
 //| COttoRiskManager class                                           |
 //| Calculates lot size for an exact risk amount from a dynamic      |
 //| RiskPercent% of LIVE ACCOUNT EQUITY (Forex & Gold).              |
-//| Strict 1% dynamic-equity model - no fixed-dollar override.       |
+//| Strict dynamic-equity model - no fixed-dollar override.           |
+//| v5.68: baseline HALVED to 0.5% (was 1.0%) across all four rungs.   |
 //| v5.49: BELOW-MIN SIZING ABORTS (returns 0.0 -> caller suppresses) |
 //| instead of clamping up to a fixed min lot; shared overshoot factor.|
 //+------------------------------------------------------------------+
@@ -178,7 +179,8 @@ public:
                " | VolMin=", DoubleToString(m_volumeMin, 2),
                " | VolMax=", DoubleToString(m_volumeMax, 2),
                " | VolStep=", DoubleToString(m_volumeStep, 2),
-               " | Risk: ", DoubleToString(RiskPercent,2), "% of acct");
+               " | Risk: ", DoubleToString(RiskPercent,2), "% of acct",
+               " (=$", DoubleToString(AccountInfoDouble(ACCOUNT_EQUITY) * RiskPercent / 100.0, 2), " on current equity)");
       return true;
      }
 

@@ -4,7 +4,7 @@
 //|            OTTO EA — dynamic file editing, cancellation, email       |
 //+------------------------------------------------------------------+
 #property copyright "OTTO EA - Goat Funded Trader (GFT) Master Build"
-#property version   "5.67"
+#property version   "5.68"
 
 #ifndef __OTTO_JOURNAL__
 #define __OTTO_JOURNAL__
@@ -68,6 +68,28 @@ private:
       double pt = SymbolInfoDouble(m_symbol, SYMBOL_POINT);
       if(pt <= 0) return "0.0";
       return DoubleToString(d / (pt * 10.0), 1);
+     }
+
+   // v5.68: dollar risk for a given % knob. Sits beside FmtPips()/FmtPrice()
+   // so the journal can print the SAME number the sizer is about to commit,
+   // instead of re-deriving it from a lot size after normalization.
+   double            RiskMoneyAt(double pct)
+     {
+      if(pct <= 0.0) return 0.0;
+      double eq = AccountInfoDouble(ACCOUNT_EQUITY);
+      if(eq <= 0.0) return 0.0;
+      return eq * pct / 100.0;
+     }
+
+   // v5.68: "  (= 0.50% of equity)" tail for a committed dollar figure, so the
+   // entry record states the EFFECTIVE % after lot normalization rather than
+   // echoing the knob. Returns "" when equity is unusable -- a journal row must
+   // never print a divide-by-zero artefact.
+   string            RiskPctTail(double money)
+     {
+      double eq = AccountInfoDouble(ACCOUNT_EQUITY);
+      if(eq <= 0.0 || money <= 0.0) return "";
+      return "  (=" + DoubleToString(money / eq * 100.0, 2) + "% of equity)";
      }
 
    string            FmtDuration(datetime o, datetime c)
@@ -218,7 +240,7 @@ public:
       W("  Setup ID          : " + tradeId);
       W("  Logic             : " + phase);
       W("  Execution Mode    : " + execMode);
-      W("  Trigger Price     : " + FmtPrice(entryPrice) + " (Near-Edge Pullback entry: near edge +/- (blockHeight + 1.0*ATR))");
+      W("  Trade Entry Point : " + FmtPrice(entryPrice) + " (Near-Edge Pullback entry: near edge +/- (blockHeight + 1.0*ATR))");
       W("  Initial SL        : " + FmtPrice(slPrice) + " | 1R = " + FmtPrice(blk.rrUnit));
       W("  Volume            : " + DoubleToString(lotSize,2));
       string actionDesc = "";
@@ -228,11 +250,16 @@ public:
          actionDesc = "RESISTANCE (Continuation Breakout / Buy at Near Edge + blockHeight + 1.0*ATR | SL 1R back)";
       W("  Trade             : " + actionDesc);
       W("  Block Top/Bottom  : Top=" + FmtPrice(blk.top) + " | Bottom=" + FmtPrice(blk.bottom) + " | Mid=" + FmtPrice(blk.midpoint) + " | Height=" + FmtPrice(blk.blockHeight));
+      // v5.68: the full geometry in ONE place -- block height in price AND pips,
+      // the 1R distance the SL is set from, and the money actually committed.
+      W("  Block Height      : " + FmtPrice(blk.blockHeight) + " (" + FmtPips(blk.blockHeight) + " pips)  = Top - Bottom");
+      W("  SL Distance (1R)  : " + FmtPrice(blk.rrUnit) + " (" + FmtPips(blk.rrUnit) + " pips)  = Block Height + 0.5*ATR");
+      W("  Risk Allocation   : " + DoubleToString(RiskPercent,2) + "% of equity = $" + DoubleToString(RiskMoneyAt(RiskPercent),2) + " (v5.68 baseline)");
       W("  Projected Target  : " + FmtPrice(ProjectedTarget(blk, dir)) + " (InpMaxRR projection, far edge +/- RR x 1R; context only - exits are trail-based)");
       if(blk.wick1Time > 0 && blk.wick2Time > 0)
         {
-         W("  Wick 1 (Anchor)   : " + TimeToString(blk.wick1Time) + " H=" + FmtPrice(blk.wick1.highPrice) + " L=" + FmtPrice(blk.wick1.lowPrice));
-         W("  Wick 2 (Retest)   : " + TimeToString(blk.wick2Time) + " H=" + FmtPrice(blk.wick2.highPrice) + " L=" + FmtPrice(blk.wick2.lowPrice));
+         W("  Wick 1 (Anchor)   : " + TimeToString(blk.wick1Time) + " H=" + FmtPrice(blk.wick1.highPrice) + " L=" + FmtPrice(blk.wick1.lowPrice) + " Anchor=" + FmtPrice(blk.wick1.price));
+         W("  Wick 2 (Retest)   : " + TimeToString(blk.wick2Time) + " H=" + FmtPrice(blk.wick2.highPrice) + " L=" + FmtPrice(blk.wick2.lowPrice) + " Anchor=" + FmtPrice(blk.wick2.price));
         }
       W("  Separation        : " + (blk.vetoReason==VETO_NO_SEPARATION?"FAILED":"PASSED"));
       W("================================================================");
@@ -269,10 +296,16 @@ public:
          actionDesc = "RESISTANCE (Continuation Breakout / Buy at Near Edge + blockHeight + 1.0*ATR | SL 1R back)";
       W("    - Logic     : " + actionDesc);
       W("    - Zone      : Top=" + FmtPrice(blk.top) + " | Bottom=" + FmtPrice(blk.bottom) + " | Mid=" + FmtPrice(blk.midpoint) + " | Height=" + FmtPrice(blk.blockHeight));
+      // v5.68: mirrors the armed geometry. riskDist is the ACTUAL fill-to-SL
+      // distance measured off this fill, which can differ by slippage from the
+      // planned rrUnit -- printing both is what makes a bad fill visible.
+      W("    - Block Ht  : " + FmtPrice(blk.blockHeight) + " (" + FmtPips(blk.blockHeight) + " pips)  = Top - Bottom");
+      W("    - SL Dist   : " + FmtPrice(riskDist) + " (" + FmtPips(riskDist) + " pips)  | planned 1R = " + FmtPrice(blk.rrUnit) + " (" + FmtPips(blk.rrUnit) + " pips)");
+      W("    - Risk Alloc: $" + DoubleToString(riskMoney,2) + " committed" + RiskPctTail(riskMoney));
       if(blk.wick1Time > 0 && blk.wick2Time > 0)
         {
-         W("    - Wick1     : " + TimeToString(blk.wick1Time) + " H=" + FmtPrice(blk.wick1.highPrice) + " L=" + FmtPrice(blk.wick1.lowPrice));
-         W("    - Wick2     : " + TimeToString(blk.wick2Time) + " H=" + FmtPrice(blk.wick2.highPrice) + " L=" + FmtPrice(blk.wick2.lowPrice));
+         W("    - Wick1     : " + TimeToString(blk.wick1Time) + " H=" + FmtPrice(blk.wick1.highPrice) + " L=" + FmtPrice(blk.wick1.lowPrice) + " Anchor=" + FmtPrice(blk.wick1.price));
+         W("    - Wick2     : " + TimeToString(blk.wick2Time) + " H=" + FmtPrice(blk.wick2.highPrice) + " L=" + FmtPrice(blk.wick2.lowPrice) + " Anchor=" + FmtPrice(blk.wick2.price));
         }
       W("    - Separation  : " + (blk.vetoReason==VETO_NO_SEPARATION?"FAILED":"PASSED"));
       W("================================================================");

@@ -1,0 +1,191 @@
+568: initial risk allocation halved across all four rungs; journal gains standalone block-height / 1R-distance / risk-allocation rows
+
+RATIONALE
+
+  Two requests, one release: the operator wanted the initial risk cut in half,
+  and wanted the journal to show the block geometry, the entry and the money
+  actually at stake without reading the chart.
+
+RISK -- the ladder halved as ONE piece
+
+  RiskPercent is a `const` (terminal-override lock), so halving it alone would
+  have left T2 still risking MORE than the initial entry. The whole ladder
+  moved together, preserving its flat-head shape and every ratio between rungs:
+
+      rung                     trigger           v5.67     v5.68
+      T1  RiskPercent          at market          1.0%  ->  0.5%
+      T2  InpRiskT2Pct         +1.0R              1.0%  ->  0.5%
+      T3  InpRiskT3Pct         +2.0R              0.5%  ->  0.25%
+      T4  InpRiskT4Pct         +3.0R              0.25% ->  0.125%
+                                               --------     --------
+      summed stacked exposure                  2.75%   ->  1.375%
+
+  Only LOTS and MONEY change. Every scale-in trigger, breakeven floor, profit
+  lock and ATR-trail rung is an R-multiple of the primary's own 1R, so no price
+  level moves and no milestone re-times. The trade manager's m_halfRiskTriggers
+  is an R-TRAIL milestone despite the name and was deliberately NOT touched.
+
+  No formula changed. GetRiskMoney(), CalculateLotSize() and RiskPctLotSize()
+  all read RiskPercent / the InpRiskT* knobs dynamically at call time, so a
+  default edit flows through with no other code change. Verified, not assumed.
+
+DELIBERATELY NOT HALVED
+
+  SafetyMaxRiskPct stays 1.5%. It is a per-leg ABORT escape hatch enforced by
+  CHighTableAuditor::AuditRiskExposure(), not a budget that tracks tuned risk.
+  Halving it would pin the auditor's ceiling at 0.75% and start flagging
+  ordinary normalized lot sizes. The peak single leg is now 0.5%, so the
+  tolerance band WIDENS from 1.5x to 3x -- the safe direction.
+
+  Consequence to report, not absorb: a halved target means the v5.49 below-min
+  abort fires more often on small accounts. It still never clamps up to a fixed
+  lot, so the failure mode remains "no trade", not "oversized trade".
+
+
+JOURNAL -- additive rows only
+
+  v5.57 already printed Top/Bottom/Mid/Height. v5.68 ADDS, in both writers:
+
+      Block Height      price AND pips, with the "= Top - Bottom" derivation
+      SL Distance (1R)  price AND pips, with the "= Block Height + 0.5*ATR"
+      Risk Allocation   the % knob AND its dollar value on live equity
+
+  LogEntry() additionally prints the REALIZED fill-to-SL distance beside the
+  planned 1R, so a slipped fill is now visible instead of hiding behind the
+  planned number -- and that is what finally CONSUMES riskDist, which was
+  computed at the top of LogEntry() and then thrown away. The wick rows gained
+  an "Anchor=" field (SFractalPeak.price: the pivot high/low, distinct from the
+  candle's full H/L, which were already printed).
+
+  FmtPips() had zero call sites before this release. It is now the formatter
+  behind every pips value above, via seven calls.
+
+  Two new private helpers, both equity-guarded so a journal row can never print
+  a divide-by-zero artefact:
+      RiskMoneyAt(pct)   equity * pct / 100
+      RiskPctTail(money) "  (= 0.50% of equity)" for a committed dollar figure
+
+STRUCTURE CONSTRAINT (why the rows are ADDITIVE)
+
+  _probe/test_v557_frontrun.py:576 requires the substring
+
+      " | Mid=" + FmtPrice(blk.midpoint) + " | Height=" + FmtPrice(blk.blockHeight)
+
+  to appear EXACTLY TWICE. Block Height therefore went into its OWN row rather
+  than extending the combined row, which would have made the count 4 and red-
+  lined a passing probe. Same reason the enriched wick rows REPLACE the old
+  ones in place rather than being added beside them -- test_v557:589 pins the
+  wick guard to exactly two occurrences.
+
+RENAMED
+
+  "  Trigger Price" -> "  Trade Entry Point" in LogSetupArmed. The label is
+  unpinned, but the parenthetical after it is pinned byte-identically by
+  test_v557:567 and test_v564:342 and is unchanged:
+      " (Near-Edge Pullback entry: near edge +/- (blockHeight + 1.0*ATR))"
+
+SURFACING
+
+  COttoRiskManager.mqh:18  stale "Strict 1% dynamic-equity model" header
+                            replaced with the halved wording.
+  COttoRiskManager.mqh:181 init print now appends the dollar risk on current
+                            equity.
+  otto.mq5:425             startup banner now prints the dollar risk and the
+                            full four-rung ladder, so a default edit is visible
+                            at boot instead of inferred from the inputs tab.
+
+SOURCE
+
+  OttoDefines.mqh:307-337  rationale block rewritten for 0.5/0.5/0.25/0.125 and
+                           1.375%, plus an explicit note on why SafetyMaxRiskPct
+                           was left alone.
+  OttoDefines.mqh:406-414  RiskPercent 1.0 -> 0.5, with a v5.68 provenance note.
+  COttoJournal.mqh:73-93   RiskMoneyAt(), RiskPctTail().
+  COttoJournal.mqh:242-262 armed geometry rows + wick anchors.
+
+PROBE
+
+  _probe/test_v52x_pyramid.py:99-102,112,124,128,471 previously pinned the OLD
+  ladder (1.0/1.0/0.5/0.25 and a 2.75% sum) and would have gone red on this
+  release by design. Re-pointed at the halved values; the assertions themselves
+  are unchanged in intent, so the probe still fails if a future retune breaks
+  the shape.
+
+  New _probe/test_v568_halfrisk.py, 56 checks in 9 sections:
+
+      1  every rung halved, shape preserved, each rung below T2 exactly half,
+         sum 1.375%, nothing rounded to zero
+      2  SafetyMaxRiskPct still 1.5, peak leg inside it, headroom = 3x,
+         halving documented rather than silent
+      3  the halving moved MONEY not GEOMETRY: all 7 ladder triggers are still
+         R-multiples and still strictly ascending; m_halfRiskTriggers is an R
+         milestone; no % literal leaked into the trade manager
+      4  the auditor still derives its ceiling from RiskPercent at runtime and
+         was NOT hard-coded
+      5  armed record: Trade Entry Point, pinned parenthetical, standalone
+         Block Height with pips, 1R distance with pips, Risk Allocation with
+         % and $, wick anchors, and Mid/Height still EXACTLY twice
+      6  entry record: mirror rows, realized-vs-planned distance, riskDist
+         consumed, FmtPips consumed, both helpers guarded
+      7  startup surfaces the % and the $ and the ladder
+      8  no collateral damage: RiskPercent still the only T1 source, below-min
+         still aborts, overshoot factor untouched, no source still asserts
+         2.75% outside a comment
+      9  all 9 files + README + banner + description stamp 5.68
+
+  Teeth verified by reverting RiskPercent to 1.0 in a scratch copy: 52/56,
+  with exactly the four arithmetic checks red. Restored and re-verified.
+
+VERIFICATION
+
+  _tools/build_check.ps1
+
+      Result: 0 errors, 0 warnings, 5235 ms, X64 Regular
+      binary: otto.ex5 (235852 bytes)
+
+  _tools/scan_encoding.ps1
+
+      9/9 sources: bom=none, validUTF8=True, bareLF=0
+
+  Full probe suite, 30 files:
+
+      new / changed
+          test_v568_halfrisk.py    56/56    (new)
+          test_v52x_pyramid.py    135/135
+      pinned by this release's subject matter
+          test_v557_frontrun.py    93/93    (Mid/Height count, wick guard x2,
+                                            pinned parenthetical)
+          test_v564_pullback.py    51/51
+          test_v563_noveto.py     139/139
+          test_v546_risk_isolation.py 28/28
+          test_v542_email.py       18/18
+          test_v539_rejection.py   24/24
+          test_v540_hybrid.py      41/41
+      everything else green except the four pre-existing failures below.
+
+  PRE-EXISTING FAILURES, NOT FROM THIS RELEASE
+
+      test_v528_hotfix.py      53/64
+      test_v531_smart_trim.py  12/35
+      test_v532_hightable.py  125/135
+      test_v543_session.py     27/29
+
+  Each was run against a clean `git worktree` of HEAD (f5410d2, v5.67) and
+  fails with the IDENTICAL counts there, so none is a regression from v5.68.
+  They are left untouched rather than repaired, because fixing them would be
+  an unrelated change riding in a risk-baseline release.
+
+  Mojibake census: zero U+00C3 / U+00E2 / U+FFFD sequences in all 9 shipped
+  sources and README.md. (_tools/repair_mojibake.py matches by design -- it
+  contains the sequences it repairs.)
+
+  One regression was caught and fixed DURING this release: the first pass of
+  the LogEntry() edit added the enriched wick block without removing the
+  original below it, duplicating the guard to three occurrences and printing
+  both wick rows twice. test_v557 caught it (93/93 -> 92/93); the stale block
+  was deleted and the probe re-run to green before the build above.
+
+  COttoJournal.mqh:298-309 entry geometry rows + realized distance.
+  README.md:44             new "Changed in v5.68" section with the rung table.
+
+  Version stamps 5.67 -> 5.68, 20 literals, via _tools/_bump_version.py.

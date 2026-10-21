@@ -1,7 +1,7 @@
 # OTTO EA
 
 MetaTrader 5 Expert Advisor — MQL5 port of the Pine Script `prop_guard_tester.pine`
-master build. **Current base: v5.67**
+master build. **Current base: v5.68**
 
 > **Primary timeframe: `PERIOD_M15`** (`InpPrimaryTF`). Pivot detection,
 > block formation and the ATR handle all read the primary TF, so the EA is
@@ -40,6 +40,37 @@ them go the Front-Run, Stale 45D, Near-Miss 6D, Momentum and FVG vetoes. What
 survives is the structural funnel only: **Separation, Sizing, Broken, Flipped**.
 Their `input` declarations remain as labelled no-ops so existing `.set` files
 still load.
+
+### Changed in v5.68 — risk baseline halved, journal geometry completed
+
+**The initial risk allocation is halved.** All four pyramid rungs moved as one
+piece, so the ladder keeps its shape while every absolute number halves:
+
+| Rung | Trigger | v5.67 | v5.68 |
+|---|---|---|---|
+| T1 `RiskPercent` | at market | 1.0% | **0.5%** |
+| T2 `InpRiskT2Pct` | `+1.0R` | 1.0% | **0.5%** |
+| T3 `InpRiskT3Pct` | `+2.0R` | 0.5% | **0.25%** |
+| T4 `InpRiskT4Pct` | `+3.0R` | 0.25% | **0.125%** |
+| *summed stacked* | | *2.75%* | ***1.375%*** |
+
+Only **lots and money** change. Every scale-in trigger, breakeven floor, profit
+lock and ATR trail rung is an **R-multiple** of the primary's own 1R, so no
+price level moves and no milestone re-times. `SafetyMaxRiskPct` stays at **1.5%**
+on purpose: it is a per-leg abort escape hatch, not a budget that should track
+tuned risk, and halving it would shrink the auditor's `RiskPercent * 1.50`
+tolerance to 0.75% and start flagging ordinary normalized lot sizes.
+
+> **Consequence to watch:** a halved target means the v5.49 below-min rule now
+> aborts more often on small accounts. It still never clamps up to a fixed lot.
+
+**The journal now carries the full block geometry.** Both `LogSetupArmed()` and
+`LogEntry()` print block top / bottom / midpoint / height, and v5.68 adds the
+standalone **Block Height** in price *and* pips, the **1R stop distance** in
+price *and* pips, and the **risk allocation** actually being committed. Wick
+rows now name the pivot `price` that anchored the block, and `LogEntry()` prints
+the **realized** fill-to-SL distance beside the planned 1R so a slipped fill is
+visible instead of hiding behind the planned number.
 
 ## Build (strict gate)
 

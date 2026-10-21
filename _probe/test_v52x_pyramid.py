@@ -4,8 +4,9 @@ v5.29 static verification probe - 4-tranche Risk-% pyramid + trail repoint.
 Pins the behaviour that the MQL5 compiler gate CANNOT exercise:
 
   1. Four risk rungs with distinct, strictly-ascending triggers:
-     T1 RiskPercent (1.0, at market), T2 InpRiskT2Pct (at +1.0R),
+     T1 RiskPercent (0.5, at market), T2 InpRiskT2Pct (at +1.0R),
      T3 InpRiskT3Pct (at +2.0R), T4 InpRiskT4Pct (at +3.0R).
+     v5.68 halved every rung: 0.5 / 0.5 / 0.25 / 0.125.
   2. Each rung draws its OWN risk input - an unrecognised tranche is refused
      outright and can never fall through onto another rung's risk budget
      (the old two-way ternary silently gave any tranche != 2 the T3 risk).
@@ -21,7 +22,7 @@ Pins the behaviour that the MQL5 compiler gate CANNOT exercise:
   6. The lot-sizing floor is epsilon-safe, so a raw lot that is mathematically
      an exact multiple of the volume step is not silently dropped one step.
   7. The worst SINGLE leg sits inside the SafetyMaxRiskPct per-leg budget, and
-     the 2.75% summed stacked exposure is documented as intended (v5.61: that
+     the 1.375% summed stacked exposure is documented as intended (v5.61: that
      input is a per-leg abort threshold, not a basket-sum cap - see the note in
      OttoDefines.mqh and AuditRiskExposure(), which tracks peakRiskPct only).
   8. The v5.31 STRICT stop-loss milestone floors, measured from primaryEntry:
@@ -96,10 +97,10 @@ check("T1 risk input RiskPercent exists", T1_RISK is not None)
 check("T2 risk input InpRiskT2Pct exists", T2_RISK is not None)
 check("T3 risk input InpRiskT3Pct exists", T3_RISK is not None)
 check("T4 risk input InpRiskT4Pct exists", T4_RISK is not None)
-check("RiskPercent (T1) defaults to 1.0", T1_RISK == 1.0, T1_RISK)
-check("InpRiskT2Pct defaults to 1.0", T2_RISK == 1.0, T2_RISK)
-check("InpRiskT3Pct defaults to 0.5", T3_RISK == 0.5, T3_RISK)
-check("InpRiskT4Pct defaults to 0.25", T4_RISK == 0.25, T4_RISK)
+check("RiskPercent (T1) defaults to 0.5 (v5.68 halved)", T1_RISK == 0.5, T1_RISK)
+check("InpRiskT2Pct defaults to 0.5 (v5.68 halved)", T2_RISK == 0.5, T2_RISK)
+check("InpRiskT3Pct defaults to 0.25 (v5.68 halved)", T3_RISK == 0.25, T3_RISK)
+check("InpRiskT4Pct defaults to 0.125 (v5.68 halved)", T4_RISK == 0.125, T4_RISK)
 check("no dead InpRiskT1Pct input was re-introduced",
       not re.search(r"^\s*input\s+double\s+InpRiskT1Pct", DEFS_T, re.M))
 
@@ -109,25 +110,25 @@ if all(r is not None for r in RISKS):
     check("risk ladder is non-increasing after T2 (T1 >= T2 > T3 > T4)",
           RISKS[0] >= RISKS[1] > RISKS[2] > RISKS[3], RISKS)
     total = sum(RISKS)
-    check("ladder total risk is 2.75%", abs(total - 2.75) < 1e-12, total)
+    check("ladder total risk is 1.375%", abs(total - 1.375) < 1e-12, total)
     budget = num_input(DEFS_T, "SafetyMaxRiskPct")
     # v5.61: SafetyMaxRiskPct is a PER-LEG abort threshold, not a summed-ladder
     # cap. AuditRiskExposure() tracks peakRiskPct -- the worst single leg, from
     # its own entry to the shared basket SL -- and never the basket sum, so the
     # check is re-scoped to match what the runtime actually enforces. On this
-    # ladder the peak leg is T1/T2 at 1.0%, safely inside the 1.5% budget.
+    # ladder the peak leg is T1/T2 at 0.5%, safely inside the 1.5% budget.
     check("every rung stays inside the SafetyMaxRiskPct per-leg budget",
           budget is not None and max(RISKS) < budget,
           "%s < %s" % (max(RISKS), budget))
     # ...while the SUMMED stacked exposure is deliberate and pinned explicitly,
     # so a future retune cannot quietly drift the total without a red probe.
-    check("summed stacked exposure is documented as intended (2.75%, not a cap breach)",
-          abs(total - 2.75) < 1e-12, total)
+    check("summed stacked exposure is documented as intended (1.375%, not a cap breach)",
+          abs(total - 1.375) < 1e-12, total)
 else:
     check("risk ladder is non-increasing after T2 (T1 >= T2 > T3 > T4)", False, RISKS)
-    check("ladder total risk is 2.75%", False, RISKS)
+    check("ladder total risk is 1.375%", False, RISKS)
     check("every rung stays inside the SafetyMaxRiskPct per-leg budget", False, RISKS)
-    check("summed stacked exposure is documented as intended (2.75%, not a cap breach)",
+    check("summed stacked exposure is documented as intended (1.375%, not a cap breach)",
           False, RISKS)
 
 
@@ -468,7 +469,7 @@ check("the [4] group banner names 4-tranche pyramiding",
 check("the pyramid group banner no longer says 3 tranches",
       "3-tranche pyramiding" not in DEFS_T)
 check("the ladder total is documented in the inputs",
-      "2.75" in DEFS_T)
+      "1.375" in DEFS_T)
 check("the MILESTONE LADDER documents the +2.0R rung",
       re.search(r"\+2\.0R\s+lock rung 2", DEFS_T) is not None)
 check("InpLockProfit2RR and InpLockProfit2TargetRR are both declared",

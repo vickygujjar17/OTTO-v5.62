@@ -1,11 +1,11 @@
 //+------------------------------------------------------------------+
 //|                                                       OttoEA.mq5 |
 //|                    OTTO — Goat Funded Trader (GFT) Master Build    |
-//|                    Pine Script Master Build Port (v5.67)            |
+//|                    Pine Script Master Build Port (v5.68)            |
 //|                                    Institutional / Real-Money    |
 //+------------------------------------------------------------------+
 #property copyright "OTTO EA - Goat Funded Trader (GFT) Master Build"
-#property version   "5.67"
+#property version   "5.68"
 #property description "OTTO EA â€” Goat Funded Trader (GFT) Master Build"
 #property description "Structural vetoes only: Separation | Sizing | Broken | Flipped"
 #property description "Modules: Risk | Block Manager | Order Mgmt | Trail"
@@ -184,7 +184,7 @@ int OnInit(void)
    g_symbol = _Symbol;
 
    Print("==============================================================");
-   Print("  OTTO EA v5.67 — 28-Pair Institutional Master Build — INITIALIZING");
+   Print("  OTTO EA v5.68 — 28-Pair Institutional Master Build — INITIALIZING");
    Print("  Symbol: ", g_symbol, " | Magic: ", MagicNumber);
    Print("==============================================================");
 
@@ -423,6 +423,9 @@ int OnInit(void)
    Print("==============================================================");
    Print("  OTTO EA INITIALIZED SUCCESSFULLY");
    Print("  Risk: ", DoubleToString(RiskPercent,2), "% dynamic equity"
+         " (=$", DoubleToString(AccountInfoDouble(ACCOUNT_EQUITY) * RiskPercent / 100.0, 2), ")",
+         " | Ladder: T1 ", DoubleToString(RiskPercent,2), "% / T2 ", DoubleToString(InpRiskT2Pct,2),
+         "% / T3 ", DoubleToString(InpRiskT3Pct,3), "% / T4 ", DoubleToString(InpRiskT4Pct,3), "%",
          " | DailyDD: ", SafetyDailyDDLimit, "% | TotalDD: ", SafetyTotalDDLimit, "%");
    Print("==============================================================");
 
