@@ -1,12 +1,13 @@
 # OTTO EA
 
 MetaTrader 5 Expert Advisor — MQL5 port of the Pine Script `prop_guard_tester.pine`
-master build. **Current base: v5.70**
+master build. **Current base: v5.71**
 
-> **Primary timeframe: `PERIOD_M15`** (`InpPrimaryTF`). Pivot detection,
-> block formation and the ATR handle all read the primary TF, so the EA is
-> chart-independent: attach it to any chart and structure is still computed
-> on M15. Bar-count inputs (`MaxBlockDistance`, `LookbackBars`) are counted
+> **Primary timeframe: `PERIOD_H1`** (`InpPrimaryTF`, moved from `PERIOD_M15`
+> in v5.71). Pivot detection, block formation and the ATR handle all read the
+> primary TF, so the EA is chart-independent: attach it to any chart and
+> structure is still computed on H1 — nothing in the tree reads the chart
+> period. Bar-count inputs (`MaxBlockDistance`, `LookbackBars`) are counted
 > in primary-TF bars, so they rebase when the TF changes.
 
 ## Layout
@@ -40,6 +41,45 @@ them go the Front-Run, Stale 45D, Near-Miss 6D, Momentum and FVG vetoes. What
 survives is the structural funnel only: **Separation, Sizing, Broken, Flipped**.
 Their `input` declarations remain as labelled no-ops so existing `.set` files
 still load.
+
+### Changed in v5.71 — default primary timeframe moved to 1 hour (`PERIOD_H1`)
+
+**`InpPrimaryTF` now defaults to `PERIOD_H1`** (was `PERIOD_M15`). This is a
+**cadence change, not a cosmetic default** — the input is load-bearing. It keys
+pivot detection, block formation, the ATR handle and the `IsNewBar()` funnel
+gate, and nothing in the tree reads the chart period, so the EA stays
+chart-independent: attach it to any chart and structure is still computed on H1.
+
+The rationale is that an hourly pivot is a swing a continuation can actually
+ride, where an M15 pivot is mostly intraday noise. Structural block formation,
+ATR scanning and trend-continuation tracking are all measured on the new unit.
+
+**What actually re-times:**
+
+| Quantity | On M15 | On H1 |
+|---|---|---|
+| Funnel wake-up (`IsNewBar()` on primary TF) | every 15 min | **every hour** |
+| Pivot confirmation lag (`InpRightBars=3`) | 45 min | **3 hours** |
+| `ATRPeriod=14` lookback | 3.5 h | **14 h** |
+| `MaxBlockDistance=150` bars | ~37.5 h | **~6.25 days** |
+| `LookbackBars=300` bars | ~3 days | **~12.5 days** |
+
+> **Risk % is unchanged; the ruler is bigger.** `rrUnit = blockHeight +
+> 0.5 × ATR`, and ATR roughly quadruples on the higher TF, so **absolute stops
+> widen and lots shrink** at the same `RiskPercent`. The ladder's R-multiples
+> still line up exactly as before — `+1.0R`, `+2.0R`, `+3.0R` and the `+0.75R`
+> lock are all fractions of the primary's own 1R — so no formula changed, only
+> the instrument each R is measured against. Expect **fewer setups, each
+> spanning days rather than hours**.
+
+Nothing else moved: `PERIOD_D1` still drives the market-day counter (a calendar
+concept, deliberately not the strategy period), and `InpAnchorTF` remains a
+retired no-op. Note that `InpAnchorTF` is declared as `input int = PERIOD_H1`
+and now *looks* like the live knob — it is not; `_probe/test_v571_timeframe.py`
+pins that it has no readers.
+
+A `.set` file that pins `InpPrimaryTF` will **override** the new default and
+silently keep M15. Re-save any saved set that carries an explicit value.
 
 ### Changed in v5.70 — non-monotonic risk tiers, +0.75R profit lock at +1.0R
 

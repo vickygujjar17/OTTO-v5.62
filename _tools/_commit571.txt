@@ -1,0 +1,86 @@
+571: default primary timeframe moved to 1 hour (PERIOD_H1)
+
+InpPrimaryTF now defaults to PERIOD_H1 instead of PERIOD_M15.
+
+This is a cadence change, not a cosmetic default, and the distinction is
+the whole point of the release. The input is load-bearing: it is the period
+handed to every iTime/iHigh/iLow/iOpen/iClose/iBarShift/Bars call in
+COttoBlockManager and COttoMarketStructure, to the iATR handle, and to the
+IsNewBar() funnel gate. Nothing in the tree reads the chart period -- zero
+_Period and zero Period() references -- so the EA stays chart-independent:
+attach it to a chart of any period and structure is still computed on H1.
+
+The rationale is that an hourly pivot is a swing a continuation can actually
+ride, where an M15 pivot is mostly intraday noise. Structural block
+formation, ATR scanning and trend-continuation tracking are all measured on
+the new unit.
+
+WHAT RE-TIMES. The engine slows 4x, and the effect is not confined to the
+funnel:
+
+  * the funnel wakes once an HOUR instead of every 15 minutes;
+  * InpRightBars=3 confirmation lag goes from 45 minutes to 3 hours;
+  * ATRPeriod=14 now spans 14 hours instead of 3.5, so rrUnit =
+    blockHeight + 0.5*ATR is measured on a wider unit. Absolute stops widen
+    and lots shrink at the same RiskPercent. Risk % itself is untouched --
+    the instrument being measured got bigger, not the bet;
+  * MaxBlockDistance=150 rebases from ~37.5 hours to ~6.25 days, and
+    LookbackBars=300 from ~3 days to ~12.5 days.
+
+No formula changed. Every scale-in trigger, profit-lock rung and ATR trail
+activation is still an R-multiple of the primary's own 1R, so the ladder
+from v5.70 lines up exactly as before -- +1.0R, +2.0R, +3.0R and the +0.75R
+lock are all fractions of whatever 1R now is. Expect fewer setups, each
+spanning days rather than hours.
+
+Nothing else moved. PERIOD_D1 still drives the market-day counter: a market
+day is a calendar concept and deliberately does not follow the strategy
+period, so the D1 reads survive untouched and were a specific hazard for a
+blind PERIOD_* sweep.
+
+The retired InpAnchorTF no-op did not get revived either. It is declared as
+`input int = PERIOD_H1`, which after this release is the same value the live
+knob now carries -- it reads like the knob that did the work. It is not; the
+probe pins that it has no readers outside OttoDefines.mqh.
+
+A .set file that pins InpPrimaryTF still wins over the default. Any saved set
+carrying an explicit M15 value will silently keep M15; re-save it.
+
+NEW PROBE: _probe/test_v571_timeframe.py
+
+A one-token default change compiles identically either way and no formula
+moves, so nothing in the tree can notice when the documentation drifts back
+to claiming M15. The probe pins 25 checks in six groups: the default is
+exactly PERIOD_H1 and still an ENUM_TIMEFRAMES; no live code reads _Period,
+Period() or PERIOD_CURRENT; the ATR handle, the IsNewBar() gate and the block
+manager's own bar gate all key on InpPrimaryTF; no price call in the block
+manager or market structure hard-codes a PERIOD_ constant; the market-day
+counter still runs on PERIOD_D1 and was not swept along; and InpAnchorTF is
+still declared, still labelled RETIRED and still has no readers.
+
+The negative assertions are the point. Every dangerous edit around a change
+like this is a find-replace accident and none of them is a compile error:
+retargeting the D1 counter would silently retire the market-day gate,
+reviving InpAnchorTF would make a dead input look live, and PERIOD_CURRENT
+creeping back would re-couple the funnel to whatever chart the EA sits on
+and undo the v5.66 contract that lets a bare input govern structure.
+
+The probe derives RELEASE from the source stamps rather than pinning it, so
+it stays correct on the next bump without edits.
+
+SCOPE. One input default, the prose describing it, and the new probe. The
+seven module headers, OttoDefines.mqh and otto.mq5 move only their version
+stamp and the input-group labels, via _tools/_bump_version.py. README gains a
+v5.71 section with the retiming table so the cadence shift is documented
+rather than implied by a single changed token.
+
+VALIDATION. build_check.ps1: 0 errors, 0 warnings. Probe suite: 29 of 32
+green -- the red set is unchanged from v5.70 ({v531_smart_trim,
+v532_hightable, v543_session}, all pre-existing and unrelated). The new probe
+is 25/25 and test_v570_ladder.py still passes 84/84, confirming the R-multiple
+ladder is untouched by the retiming. normalize_eol.py reports 0 rewrites, so
+every edit preserved strict CRLF.
+
+NOT VERIFIED. That H1 is the better timeframe, and that the terminal resolves
+H1 bars for a symbol with a short history. Both are runtime properties and
+this is static analysis; the probe says so in its own docstring.

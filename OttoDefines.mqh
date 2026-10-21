@@ -1,12 +1,12 @@
 //+------------------------------------------------------------------+
 //|                                                   OttoDefines.mqh |
-//|             OTTO EA v5.70 — 28-Pair Institutional Master Build |
+//|             OTTO EA v5.71 — 28-Pair Institutional Master Build |
 //|                 Central Definitions / Enums / Input Parameters    |
 //|         Exact MQL5 port of Pine Script "prop_guard_tester.pine"   |
 //+------------------------------------------------------------------+
 #property copyright "OTTO EA - Goat Funded Trader (GFT) Master Build"
-#property version   "5.70"
-#property description "OTTO v5.70 — Goat Funded Trader (GFT) Master Build (Wick1+Wick2 | Separation | Sizing | Broken | Flipped — structural vetoes only)"
+#property version   "5.71"
+#property description "OTTO v5.71 — Goat Funded Trader (GFT) Master Build (Wick1+Wick2 | Separation | Sizing | Broken | Flipped — structural vetoes only)"
 
 #ifndef __OTTO_DEFINES__
 #define __OTTO_DEFINES__
@@ -246,7 +246,27 @@ input int      MagicNumber       = 20240624;   // Unique EA Magic Number
 input string   TradeComment      = "OTTO";     // Trade comment prefix
 input bool     EnableLogging     = true;       // Detailed console/file logging
 input bool     EnableJournal     = true;       // Write human-readable .txt trade journal
-input ENUM_TIMEFRAMES InpPrimaryTF = PERIOD_M15; // Primary TF: structure | ATR | blocks
+// v5.71: DEFAULT PRIMARY TF MOVED M15 -> H1. This one value is load-bearing,
+// not a display default: it keys pivot detection, block formation, the ATR
+// handle and the IsNewBar() funnel gate, and NOTHING in the tree reads the
+// chart period (zero _Period / Period() references), so attaching the EA to a
+// chart of any period still computes structure on H1. H1 is the execution
+// timeframe for structural block formation, ATR scanning and trend
+// continuation: an hourly pivot is a swing a continuation can actually ride,
+// where an M15 pivot is mostly intraday noise.
+//
+// The retiming is the real change, and it is deliberate:
+//   * the funnel now wakes once an HOUR, not once every 15 minutes;
+//   * InpRightBars=3 confirmation lag goes 45 min -> 3 hours;
+//   * ATRPeriod=14 spans 14 hours (was 3.5), so rrUnit = blockHeight + 0.5*ATR
+//     is measured on a wider unit -> WIDER absolute stops and SMALLER lots at
+//     the same RiskPercent. Risk % is unchanged; the instrument being measured
+//     got bigger.
+//   * bar-count inputs scale with it: MaxBlockDistance=150 spans ~6.25 days
+//     (was ~37.5 h) and LookbackBars=300 spans ~12.5 days (was ~3).
+// A .set file that pins this input still wins over the default -- re-save any
+// saved set that carries an explicit M15 value.
+input ENUM_TIMEFRAMES InpPrimaryTF = PERIOD_H1; // Primary TF: structure | ATR | blocks
 
 input group "══════════════════════════════════════════════════"
 input group "  [1] PIVOT STRUCTURE (Pine: Left=8, Right=3)"
@@ -258,7 +278,7 @@ input int      MaxBlockDistance  = 150;        // Max bars between W1 and W2 for
 input int      LookbackBars      = 300;        // Bars the pivot engine may reference
 
 input group "══════════════════════════════════════════════════"
-input group "  [2] STRUCTURAL VETOES — v5.70 (geometry only)"
+input group "  [2] STRUCTURAL VETOES — v5.71 (geometry only)"
 input group "══════════════════════════════════════════════════"
 // v5.63 — AUXILIARY VETO PURGE. This group used to hold six discretion
 // filters (FVG, Momentum, Front-Run, Stale 45D, Near-Miss 6D) plus the
@@ -448,7 +468,7 @@ input int      RetryDelayMs       = 500;      // Retry delay (milliseconds)
 input int      MaxSpreadPoints    = 50;       // Max spread (points) for new entries
 
 input group "══════════════════════════════════════════════════"
-input group "  [7] RETIRED NEWS SHIELD — v5.70 (no-ops)"
+input group "  [7] RETIRED NEWS SHIELD — v5.71 (no-ops)"
 input group "══════════════════════════════════════════════════"
 // v5.63 — NEWS SHIELD PURGE. COttoNewsFilter.mqh is deleted: the calendar
 // blackout never fired in production (EnableNewsFilter defaulted to false and
@@ -486,7 +506,7 @@ input ENUM_SIM_SENTIMENT InpSimSentiment = SENT_IGNORE;  // RETIRED (v5.63) - no
 // having no knob at all. MT5 tolerates a .set file naming an absent input.
 
 input group "══════════════════════════════════════════════════"
-input group "  [9] RETIRED VECTOR ENGINE — v5.70 (no-ops)"
+input group "  [9] RETIRED VECTOR ENGINE — v5.71 (no-ops)"
 input group "══════════════════════════════════════════════════"
 // v5.63 — CURRENCY-VECTOR PURGE. COttoCorrelationFilter.mqh is deleted. It
 // carried two distinct things, and BOTH were part of the auxiliary veto layer:
@@ -515,7 +535,7 @@ input int      InpAnchorTF           = PERIOD_H1;  // RETIRED (v5.63) - no-op, k
 input bool     InpCancelOpposingPendings = true; // RETIRED (v5.63) - no-op, kept for .set compatibility
 
 input group "══════════════════════════════════════════════════"
-input group "  [10] HIGH TABLE AUDITOR — v5.70"
+input group "  [10] HIGH TABLE AUDITOR — v5.71"
 input group "══════════════════════════════════════════════════"
 // Decoupled watchdog: audits live state on its OWN timer cadence rather
 // than inside OnTick, so a halted / paused / tick-starved trade loop can
@@ -525,7 +545,7 @@ input bool     InpEnableHighTable       = true;  // Enable High Table watchdog
 input int      InpHighTableAuditSeconds = 5;     // Audit cadence (seconds, >= 1)
 
 input group "══════════════════════════════════════════════════"
-input group "  [11] MANUAL TRADE ADOPTION — v5.70"
+input group "  [11] MANUAL TRADE ADOPTION — v5.71"
 input group "══════════════════════════════════════════════════"
 // Let this EA manage positions opened BY HAND on its own chart symbol.
 // A manual position is identified as a MAGIC-0 position on m_symbol: the
@@ -542,7 +562,7 @@ input int      InpManualNoSLWarnMinutes = 5;     // Re-warn cadence for a manual
 
 //+------------------------------------------------------------------+
 input group "══════════════════════════════════════════════════"
-input group "  [12] RETIRED VETO REVERSAL CONVERSIONS — v5.70"
+input group "  [12] RETIRED VETO REVERSAL CONVERSIONS — v5.71"
 input group "══════════════════════════════════════════════════"
 // v5.34 built five switches that let a vetoed Phase 1 setup be re-used as a
 // Phase 2 REVERSAL instead of being discarded.

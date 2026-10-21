@@ -1,11 +1,11 @@
 //+------------------------------------------------------------------+
 //|                                                       OttoEA.mq5 |
 //|                    OTTO — Goat Funded Trader (GFT) Master Build    |
-//|                    Pine Script Master Build Port (v5.70)            |
+//|                    Pine Script Master Build Port (v5.71)            |
 //|                                    Institutional / Real-Money    |
 //+------------------------------------------------------------------+
 #property copyright "OTTO EA - Goat Funded Trader (GFT) Master Build"
-#property version   "5.70"
+#property version   "5.71"
 #property description "OTTO EA â€” Goat Funded Trader (GFT) Master Build"
 #property description "Structural vetoes only: Separation | Sizing | Broken | Flipped"
 #property description "Modules: Risk | Block Manager | Order Mgmt | Trail"
@@ -103,7 +103,7 @@ int OnInit(void)
    g_symbol = _Symbol;
 
    Print("==============================================================");
-   Print("  OTTO EA v5.70 — 28-Pair Institutional Master Build — INITIALIZING");
+   Print("  OTTO EA v5.71 — 28-Pair Institutional Master Build — INITIALIZING");
    Print("  Symbol: ", g_symbol, " | Magic: ", MagicNumber);
    Print("==============================================================");
 
@@ -362,8 +362,9 @@ void OnDeinit(const int reason)
 //+------------------------------------------------------------------+
 //| New-bar detection â€” gates the block formation + veto funnel      |
 //+------------------------------------------------------------------+
-//| v5.66: keyed on InpPrimaryTF (default M15), NOT on the chart     |
-//| period, so the funnel follows the primary TF, not the chart.     |
+//| v5.66: keyed on InpPrimaryTF (default H1 as of v5.71), NOT the  |
+//| chart period, so the funnel follows the primary TF, not the      |
+//| chart. The gate therefore fires once an HOUR by default.        |
 bool IsNewBar(void)
   {
    datetime barTime = iTime(_Symbol, InpPrimaryTF, 0);
