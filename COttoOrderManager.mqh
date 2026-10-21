@@ -4,7 +4,7 @@
 //|              OTTO EA — exact Pine v4.70 execution port           |
 //+------------------------------------------------------------------+
 #property copyright "OTTO EA - Goat Funded Trader (GFT) Master Build"
-#property version   "5.66"
+#property version   "5.67"
 
 #ifndef __OTTO_ORDER_MANAGER__
 #define __OTTO_ORDER_MANAGER__
@@ -558,10 +558,10 @@ private:
       // zone the flip -- is retired.
       //
       // This is the single chokepoint every consumer reads (entry edge, SL,
-      // TP, basket seed, correlation gate), so the mapping stays coherent.
-      // COttoBlockManager::BlockDirection() and otto.mq5's MappedZoneDirection()
-      // are identical twins and must be kept in lockstep, or the
-      // Front-Run veto would project off the opposite side of the order.
+      // TP, basket seed), so the mapping stays coherent. v5.67 removed the
+      // otto.mq5 MappedZoneDirection() copy along with HiveMind(), so this
+      // and COttoBlockManager::BlockDirection() are now the only two twins
+      // and must stay in lockstep.
       return (block.type == BLOCK_SUPPORT) ? DIR_SHORT : DIR_LONG;   // Support -> SHORT, Resistance -> LONG
      }
 

@@ -257,17 +257,21 @@ def main():
     check("OnTick still cancels orders for structurally invalid blocks",
           "CancelOrdersForInvalidBlocks()" in MAIN_C)
 
-    hm = body(MAIN_C, "void HiveMind(")
-    check("HiveMind located", hm is not None)
-    if hm:
-        check("HiveMind resolves the conflict locally (no filter delegate)",
-              "ResolveBidirectionalConflict" not in hm and
-              "BroadcastBias" not in hm)
-        check("HiveMind still deletes the losing polarity",
-              "DeleteBlockType(BLOCK_SUPPORT)" in hm and
-              "DeleteBlockType(BLOCK_RESISTANCE)" in hm)
-        check("the KEPT side is the majority (no inverted pairing)",
-              "majority Long -> kept Resistance" in hm)
+    # v5.67 removes the residual LOCAL tie-breaker as well, so these
+    # assertions run inverted: the arbiter and its helpers must be gone,
+    # while the structural flip that replaces it must survive.
+    check("HiveMind() is no longer defined",
+          body(MAIN_C, "void HiveMind(") is None)
+    check("its single-caller helpers are gone too",
+          "MappedZoneDirection" not in MAIN_C and
+          "DeleteBlockType" not in BM_C)
+    check("no live code broadcasts or resolves a cross-chart bias",
+          "BroadcastBias" not in MAIN_C and
+          "ResolveBidirectionalConflict" not in MAIN_C)
+    check("its log namespace is gone from the shipped source",
+          "[HiveMind]" not in MAIN_T)
+    check("the structural flip that resolves an opposing fill survives",
+          "SetVeto(i, VETO_FLIPPED)" in BM_C)
 
     # ------------------------------------------------------------------
     print("\n-- 8. Journal + build tooling follow the 9-module tree --")

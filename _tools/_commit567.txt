@@ -1,0 +1,150 @@
+567: HiveMind() tie-breaker -- the last cross-zone arbiter is removed; each chart trades only its own setups
+
+RATIONALE
+
+  v5.63 deleted COttoCorrelationFilter.mqh and, with it, the CROSS-CHART
+  Hive-Mind arbiter. What it left behind was a scaled-down version of the same
+  idea running locally: HiveMind() counted the mapped direction of every live
+  zone on THIS chart and DELETED the losing polarity whenever Support and
+  Resistance were both present.
+
+  That is still one zone being deleted on the strength of another zone. This
+  commit removes it, so nothing arbitrates a zone against a zone any more:
+  each chart arms and trades whatever its own structure produced.
+
+REMOVED
+
+  otto.mq5:609-650        HiveMind()
+                          Local bidirectional-conflict arbiter. Counted
+                          MappedZoneDirection() votes across live blocks and
+                          called DeleteBlockType() on the losing polarity, or
+                          on both sides on an exact tie. Persisted no bias
+                          (v5.63 had already dropped the TS_Bias_* broadcast);
+                          the only outward sign was the [HiveMind] log line.
+
+  otto.mq5:580-583        MappedZoneDirection()
+                          Sole caller was HiveMind() (line 627). Mapped a zone
+                          to the direction it would trade, so the vote weighted
+                          the side the build actually takes.
+
+  otto.mq5:743            the call site in OnTick
+
+  COttoBlockManager.mqh
+  :1104-1117              DeleteBlockType(ENUM_BLOCK_TYPE)
+                          Sole caller was HiveMind(). Swept every block of one
+                          polarity, set VETO_FLIPPED and flagged resting orders
+                          for cancellation.
+
+BEHAVIOUR CHANGE (read this before running)
+
+  Support and Resistance zones can now be ARMED AT THE SAME TIME. Previously
+  HiveMind() deleted one side during the funnel, before it could arm; that arm
+  time arbitration is gone.
+
+  The fill-time guard is unchanged and is what resolves an opposing fill: when
+  a position fills against an existing one, the structural flip closes the
+  older position (COttoOrderManager SAR path). Net effect: the loser is now
+  closed AFTER it fills instead of never being placed, so expect occasional
+  short-lived opposing positions where there used to be none.
+
+  Checked before removing, so this is the deliberate design and not an
+  oversight -- none of the surviving guards is polarity-crossing:
+
+      CanPlaceForDirection    returns true for the opposite direction by
+                              design (that is what lets a flip fire)
+      IsBlockedByPrimary      same polarity only
+      IsAnyOrderLiveAtPrice   +/- 5 points, direction agnostic
+      HasPositionForMagic     dead code, no callers
+      virtual arm lock        cross-CHART gv lock, KEPT (see below)
+
+  HiveMind() was therefore the ONLY cross-polarity guard at arm time.
+
+DELIBERATELY KEPT
+
+  The v5.49 virtual arm lock (VirtualArmGvName, gating the placement block) is
+  a cross-chart resource lock, not a conflict arbiter. It stops two charts from
+  arming into the same price at the same moment and stays exactly as it is.
+
+  COttoBlockManager:612 SetVeto(i, VETO_FLIPPED) is the structural WIDE-RANGE
+  BREAK flip -- a genuine geometry veto, not the arbiter's. Untouched.
+
+  Every HiveMind-adjacent input stayed declared as a no-op for .set
+  compatibility, as in v5.63.
+
+SOURCE
+
+  otto.mq5:26-31          include note now records that the residual per-chart
+                          tie-breaker is gone as well.
+  otto.mq5:104-108        TS_Bias_* box note extended to say v5.67 drops the
+                          local tie-breaker too, so the tree arbitrates
+                          nothing. Padded to the box width (74) so the border
+                          stays intact.
+  COttoOrderManager.mqh
+  :561-564                "identical twins" note: otto.mq5's copy is gone, the
+                          remaining twins are GetDirectionForBlock() and
+                          BlockManager::BlockDirection(). "correlation gate"
+                          dropped from the consumer list -- it does not exist.
+  OttoDefines.mqh:451-458 v5.63 tombstone no longer claims "HiveMind() now
+                          resolves a bidirectional conflict". It records that
+                          v5.67 deletes that too, and that the SAR flip closes
+                          the loser at fill time.
+  README.md:26            new "Removed in v5.67" section above the v5.63 one.
+
+  Version stamps 5.66 -> 5.67, 20 literals, via _tools/_bump_version.py.
+
+PROBE
+
+  _probe/test_v563_noveto.py:260-270 previously ASSERTED that HiveMind() still
+  exists and still deletes the losing polarity -- four checks that this release
+  makes false by design. Inverted, plus a guard against over-removal:
+
+      HiveMind() is no longer defined            body() returns None
+      its single-caller helpers are gone too     MappedZoneDirection,
+                                                 DeleteBlockType
+      no live code broadcasts/resolves a bias    BroadcastBias,
+                                                 ResolveBidirectionalConflict
+      its log namespace is gone                  "[HiveMind]" not in MAIN_T
+      the structural flip SURVIVES               SetVeto(i, VETO_FLIPPED)
+
+  The log check reads MAIN_T (raw), not MAIN_C: "[HiveMind]" only ever appeared
+  inside Print() string literals, which comment-stripping leaves in place.
+
+METHOD
+
+  Byte-level edits again (open 'rb' / open 'wb'), driven by
+  _tools/_v567_hivemind.py, rehearsed on a copy of the tree before it was run
+  on the real one. Every deletion asserted the exact text at its boundary
+  first, and edits below a deletion were located by CONTENT rather than by line
+  number, because each deletion shifts every index below it.
+
+  otto.mq5 carries 10 mojibake em-dash sequences (c3 a2 e2 82 ac e2 80 9d).
+  All 10 survive: nothing above them was rewritten and the mojibake banner at
+  :564 was never reconstructed. Zero U+FFFD, no BOM, no bare LF.
+
+VERIFICATION
+
+  _tools/build_check.ps1 -NoDeploy
+
+      Result: 0 errors, 0 warnings, 14082 ms, X64 Regular
+      binary: otto.ex5 (226936 bytes)
+
+  0E/0W from a cold staging tree is the load-bearing check that no caller of a
+  deleted symbol survived -- a missed call site would be a compile error.
+
+  _tools/scan_encoding.ps1
+
+      9/9 sources: bom=none, validUTF8=True, bareLF=0
+
+  Probes:
+
+      test_v563_noveto.py     139/139   (was 138; +5 inverted, -4 replaced)
+      test_v564_pullback.py    51/51
+      test_v530_price_guard.py 44/44
+
+  Residual reference census, tree-wide:
+
+      HiveMind / MappedZoneDirection / DeleteBlockType /
+      BroadcastBias / ResolveBidirectionalConflict
+
+  -> 4 hits, all comments: otto.mq5:30, COttoOrderManager.mqh:562,
+     OttoDefines.mqh:453, :455. Zero live code references.

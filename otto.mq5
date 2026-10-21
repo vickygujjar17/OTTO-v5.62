@@ -1,11 +1,11 @@
 //+------------------------------------------------------------------+
 //|                                                       OttoEA.mq5 |
 //|                    OTTO — Goat Funded Trader (GFT) Master Build    |
-//|                    Pine Script Master Build Port (v5.66)            |
+//|                    Pine Script Master Build Port (v5.67)            |
 //|                                    Institutional / Real-Money    |
 //+------------------------------------------------------------------+
 #property copyright "OTTO EA - Goat Funded Trader (GFT) Master Build"
-#property version   "5.66"
+#property version   "5.67"
 #property description "OTTO EA â€” Goat Funded Trader (GFT) Master Build"
 #property description "Structural vetoes only: Separation | Sizing | Broken | Flipped"
 #property description "Modules: Risk | Block Manager | Order Mgmt | Trail"
@@ -26,7 +26,8 @@
 // v5.63: COttoNewsFilter.mqh and COttoCorrelationFilter.mqh are no longer
 // included. Both were auxiliary veto machinery (calendar blackout, portfolio
 // currency-vector consensus) rather than parts of the structural engine, and
-// both are deleted from the tree.
+// both are deleted from the tree. v5.67 then removed the residual per-chart
+// HiveMind() tie-breaker, so nothing here arbitrates one zone against another.
 
 //+------------------------------------------------------------------+
 //| Global Module Instances                                           |
@@ -102,7 +103,9 @@ datetime g_dailyDD_ResumeTime  = 0;
 //| the ~28 EA instances and any other account on the same terminal    |
 //| cannot collide. v5.63: the TS_Bias_* namespace that                 |
 //| COttoCorrelationFilter used to own is no longer written at all --   |
-//| the cross-chart arbiter that published it is deleted.               |
+//| the cross-chart arbiter that published it is deleted. v5.67 also    |
+//| drops the residual local tie-breaker, so this tree arbitrates       |
+//| nothing: every chart trades only its own zones.                     |
 //|                                                                   |
 //| NOTE: Globals live in the TERMINAL's shared namespace, not per     |
 //| chart. Two terminals on one machine have separate stores; two charts|
@@ -181,7 +184,7 @@ int OnInit(void)
    g_symbol = _Symbol;
 
    Print("==============================================================");
-   Print("  OTTO EA v5.66 — 28-Pair Institutional Master Build — INITIALIZING");
+   Print("  OTTO EA v5.67 — 28-Pair Institutional Master Build — INITIALIZING");
    Print("  Symbol: ", g_symbol, " | Magic: ", MagicNumber);
    Print("==============================================================");
 
@@ -558,99 +561,6 @@ void UpdateMarketDay(void)
   }
 
 //+------------------------------------------------------------------+
-//| MAPPED direction of a zone for the local bias vote.             |
-//|                                                                 |
-//| A Support / Resistance zone is DISCOVERED polarity, NOT trade   |
-//| direction. HiveMind counts the mapped directions of this chart's|
-//| live zones, and the conflict tie-breaker does not merely prefer  |
-//| one of two opposing zones -- it DELETES the losing polarity.    |
-//| Reading the raw zone here would therefore weight the EXACT      |
-//| OPPOSITE side to how every entry is mapped, so the tie-breaker  |
-//| would systematically delete exactly the setups this build takes.|
-//|                                                                 |
-//| Twin of COttoOrderManager::GetDirectionForBlock() and           |
-//| COttoBlockManager::BlockDirection() (both private). v5.52 PURE  |
-//| CONTINUATION: the mapping is UNCONDITIONAL and reads no phase --|
-//| a RESISTANCE zone trades DIR_LONG (a breakout above it) and a   |
-//| SUPPORT zone trades DIR_SHORT (a breakdown below it), which is  |
-//| exactly Pine's can_place gate. All three copies must stay in    |
-//| lockstep or this vote would oppose the entries it is meant to   |
-//| arbitrate.                                                      |
-//+------------------------------------------------------------------+
-ENUM_TRADE_DIRECTION MappedZoneDirection(const SSniperBlock &b)
-  {
-   return (b.type == BLOCK_SUPPORT) ? DIR_SHORT : DIR_LONG;   // Support -> SHORT, Resistance -> LONG
-  }
-
-//+------------------------------------------------------------------+
-//| Hive Mind — resolve bidirectional conflicts LOCALLY (v5.63)      |
-//|                                                                  |
-//| This function used to be a cross-chart arbiter: the block votes   |
-//| below produced only a SIGNAL, and the actual delete decision was  |
-//| delegated to COttoCorrelationFilter::ResolveBidirectionalConflict,|
-//| which summed the bias of every PEER chart through a correlation   |
-//| matrix (GetWeightedBiasSum -> TS_Bias_* global variables) and     |
-//| then broadcast this chart's own bias back out for the next one.   |
-//|                                                                  |
-//| v5.63 deletes that module, so the majority is now counted HERE,   |
-//| from this chart's own live zones and nothing else. A zone set is  |
-//| internally consistent by construction: every live zone votes with |
-//| the direction it would actually TRADE (RESISTANCE -> LONG,        |
-//| SUPPORT -> SHORT), so a strict majority of mapped votes is a       |
-//| well-defined winner, and the losing polarity is deleted.          |
-//|                                                                  |
-//| NOTE (this also fixes a recorded inversion): the old branches     |
-//| passed BLOCK_RESISTANCE where their own "kept Support" log line   |
-//| implied BLOCK_SUPPORT and vice versa. The comment there said it   |
-//| was pre-existing and deliberately not touched. Rewriting the      |
-//| tie-breaker makes the correct pairing unavoidable: the KEPT side  |
-//| is the majority, and DeleteBlockType() is called on the LOSER.    |
-//+------------------------------------------------------------------+
-void HiveMind(void)
-  {
-   if(g_dailyDD_Paused) return;
-
-   SSniperBlock allBlocks[];
-   int total = g_blockManager.GetAllBlocks(allBlocks);
-   int supportVote = 0, resistanceVote = 0;   // raw zone polarity (diagnostics)
-   int mappedVote  = 0;                       // MAPPED direction digest
-   for(int b = 0; b < total; b++)
-     {
-      if(allBlocks[b].isVetoed) continue;
-      if(allBlocks[b].type == BLOCK_SUPPORT)
-         supportVote++;
-      else if(allBlocks[b].type == BLOCK_RESISTANCE)
-         resistanceVote++;
-      // Each live zone votes with the direction it would actually TRADE,
-      // not with the polarity it was discovered as, so the vote uses the
-      // helper rather than the raw type.
-      mappedVote += (MappedZoneDirection(allBlocks[b]) == DIR_LONG) ? 1 : -1;
-     }
-
-   // mappedVote > 0 -> the LONG-mapped side (RESISTANCE) holds the majority.
-   // mappedVote < 0 -> the SHORT-mapped side (SUPPORT) holds it.
-   // mappedVote == 0 -> an exact tie; both sides go, as before.
-   if(mappedVote > 0)
-     {
-      g_blockManager.DeleteBlockType(BLOCK_SUPPORT);      // loser: SHORT-mapped
-      if(EnableLogging) Print("[HiveMind] CONFLICT: majority Long -> kept Resistance");
-     }
-   else if(mappedVote < 0)
-     {
-      g_blockManager.DeleteBlockType(BLOCK_RESISTANCE);   // loser: LONG-mapped
-      if(EnableLogging) Print("[HiveMind] CONFLICT: majority Short -> kept Support");
-     }
-   else if(supportVote > 0 && resistanceVote > 0)
-     {
-      g_blockManager.DeleteBlockType(BLOCK_SUPPORT);
-      g_blockManager.DeleteBlockType(BLOCK_RESISTANCE);
-      if(EnableLogging) Print("[HiveMind] CONFLICT: exact tie -> deleted both");
-     }
-   // One polarity only: nothing to arbitrate, every zone stays.
-  }
-
-
-//+------------------------------------------------------------------+
 //| Expert tick function â€” Main Orchestration Loop                   |
 //+------------------------------------------------------------------+
 void OnTick(void)
@@ -738,9 +648,6 @@ void OnTick(void)
 
       // Cancel any orders declared invalid during this bar's funnel
       g_orderManager.CancelOrdersForInvalidBlocks();
-
-      // Hive Mind (correlation tie-breaker)
-      HiveMind();
      }
 
 

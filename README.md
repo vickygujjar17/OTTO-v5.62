@@ -1,7 +1,7 @@
 # OTTO EA
 
 MetaTrader 5 Expert Advisor — MQL5 port of the Pine Script `prop_guard_tester.pine`
-master build. **Current base: v5.66**
+master build. **Current base: v5.67**
 
 > **Primary timeframe: `PERIOD_M15`** (`InpPrimaryTF`). Pivot detection,
 > block formation and the ATR handle all read the primary TF, so the EA is
@@ -22,6 +22,15 @@ master build. **Current base: v5.66**
 | `COttoJournal.mqh` | Human-readable trade journal |
 | `CHighTableAuditor.mqh` | "High Table" decoupled watchdog: CSV audit trail + latched email alerts |
 | `otto.mq5` | EA entry point and event handlers |
+
+### Removed in v5.67 — residual local tie-breaker
+
+`HiveMind()` (the per-chart bidirectional conflict arbiter) is deleted, with
+the two helpers it alone called: `MappedZoneDirection()` in `otto.mq5` and
+`COttoBlockManager::DeleteBlockType()`. Support and Resistance zones may now
+arm at the same time; if both sides fill, the structural flip (SAR) resolves
+the opposing position at fill time. No chart arbitrates one zone against
+another any more.
 
 ### Removed in v5.63 — auxiliary veto layer
 

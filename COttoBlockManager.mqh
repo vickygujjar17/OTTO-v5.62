@@ -4,7 +4,7 @@
 //|              OTTO EA — exact Pine v4.70 block logic port          |
 //+------------------------------------------------------------------+
 #property copyright "OTTO EA - Goat Funded Trader (GFT) Master Build"
-#property version   "5.66"
+#property version   "5.67"
 
 #ifndef __OTTO_BLOCK_MANAGER__
 #define __OTTO_BLOCK_MANAGER__
@@ -1096,25 +1096,6 @@ public:
    //| left inert: an unreferenced cluster sync is a silent invitation to|
    //| re-wire the fade.                                                |
    //+------------------------------------------------------------------+
-
-   //+------------------------------------------------------------------+
-   //| HIVE-MIND: deletes all blocks of a given type (tie-breaker).   |
-   //| Marks them for cancellation + next-bar removal.                 |
-   //+------------------------------------------------------------------+
-   void              DeleteBlockType(ENUM_BLOCK_TYPE type)
-     {
-      for(int i = m_blockCount - 1; i >= 0; i--)
-        {
-         if(m_blocks[i].type == type && !m_blocks[i].isVetoed)
-           {
-            m_blocks[i].isVetoed = true;
-            m_blocks[i].vetoReason = VETO_FLIPPED;   // reclaimed by hive-mind
-            m_blocks[i].deleteOnBarTime = iTime(m_symbol, InpPrimaryTF, 0);
-            if(m_blocks[i].limitOrderTicket > 0)
-               m_blocks[i].pendingOrderCancel = true;
-           }
-        }
-     }
 
    //+------------------------------------------------------------------+
    //| Statistics getters                                               |
