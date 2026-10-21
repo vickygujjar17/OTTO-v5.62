@@ -1,7 +1,7 @@
 # OTTO EA
 
 MetaTrader 5 Expert Advisor — MQL5 port of the Pine Script `prop_guard_tester.pine`
-master build. **Current base: v5.69**
+master build. **Current base: v5.70**
 
 > **Primary timeframe: `PERIOD_M15`** (`InpPrimaryTF`). Pivot detection,
 > block formation and the ATR handle all read the primary TF, so the EA is
@@ -41,7 +41,67 @@ survives is the structural funnel only: **Separation, Sizing, Broken, Flipped**.
 Their `input` declarations remain as labelled no-ops so existing `.set` files
 still load.
 
+### Changed in v5.70 — non-monotonic risk tiers, +0.75R profit lock at +1.0R
+
+**The ladder deepens at the confirmed rung, then tapers.** v5.69 was a strict
+geometric cascade that halved every rung. v5.70 inverts the top of that shape:
+T1 is now the **probe** — the only rung taken before the setup has proven
+anything — and T2 carries the largest allocation, because it is only reached at
+`+1.0R` with the basket already wearing a `+0.75R` floor.
+
+| Rung | Trigger | v5.69 | v5.70 |
+|---|---|---|---|
+| T1 `RiskPercent` | at market | 1.0% | **0.5%** |
+| T2 `InpRiskT2Pct` | `+1.0R` | 0.5% | **1.0%** |
+| T3 `InpRiskT3Pct` | `+2.0R` | 0.25% | **0.5%** |
+| T4 `InpRiskT4Pct` | `+3.0R` | 0.125% | **0.25%** |
+| *summed stacked* | | *1.875%* | ***2.25%*** |
+
+> **The ladder is no longer monotonic, and that is the point.** The shape is
+> `0.5 → 1.0 → 0.5 → 0.25`: the peak sits at T2 and the ladder tapers below it.
+> The v5.69 "descends strictly" and "each rung is half" assertions were
+> **deleted rather than softened** — they encoded the retired cascade and no
+> correct v5.70 tree can satisfy them. `_probe/test_v570_ladder.py` (renamed
+> from `test_v569_ladder.py`) replaces them with the weaker ordering that
+> actually survives: `T2 > T1`, `T2 > T3 > T4`, plus an explicit negative
+> assertion that a geometric cascade has *not* been restored.
+
+**The `+1.0R` rung now locks `+0.75R` of profit instead of parking at
+cost-covering breakeven.** A new input `InpBEProfitLockRR = 0.75` names the
+target; `InpBreakEvenRR` still names the `R` at which the rung fires. Cost
+covering is preserved as a **floor**, not discarded: each branch takes
+`MathMax(lock, friction)` on a LONG (`MathMin` on a SHORT), so a pathologically
+tight 1R still falls back to covering commission + swap + half-spread rather
+than booking a loss on a winner. `CalcBasketFriction()` therefore stays live.
+
+The `+1.0R` branch's old outer guard (`desiredSL < primaryEntry`) is gone. It
+would have skipped the lock for any stop already ratcheted to somewhere between
+entry and `+0.75R`, leaving the basket under-locked; the forward-only test
+(`desiredSL < beSL`) is now the only gate. The T2 fill carries the same `+0.75R`
+level as its `slOverride` and is clamped against the live session stop, so the
+**largest** rung is no longer born wearing the **loosest** stop — the inversion
+v5.61 fixed for T3.
+
+**The auditor's per-leg ceiling is re-anchored on the peak rung.** It was
+`RiskPercent * 1.50`, which on this ladder would be `0.5 * 1.5 = 0.75%` — below
+the 1.0% T2 leg, so it would have fired a false "position risk breach" on every
+healthy pyramid. It now uses `max(T1,T2,T3,T4) * 1.50`, which is **1.5%**,
+numerically identical to v5.69: the watchdog neither loosens nor tightens here,
+only its anchor moves.
+
+Only **lots and money** move. Every scale-in trigger, profit-lock rung and ATR
+trail activation is still an **R-multiple** of the primary's own 1R, so no price
+level changes and no milestone re-times — except the `+1.0R` rung's *target*,
+which is now `+0.75R` by design.
+
 ### Changed in v5.69 — T1 restored to a geometric cascade, prop-firm layer stripped
+
+> **Superseded by v5.70.** The geometric cascade described below
+> (`1.0 / 0.5 / 0.25 / 0.125`, sum 1.875%) is retired. v5.70 re-tiers the ladder
+> to `0.5 / 1.0 / 0.5 / 0.25` (sum 2.25%) and makes the `+1.0R` rung lock
+> `+0.75R` rather than park at cost-covering breakeven. The auditor's ceiling
+> also stops being `RiskPercent * 1.50` and is anchored on the peak rung
+> instead. The prop-firm purge below still stands unchanged.
 
 **T1 is back at 1.0%, and the ladder is now a geometric cascade.** v5.68 halved
 every rung, which turned the v5.61+ flat head into `0.5 / 0.5 / 0.25 / 0.125`.

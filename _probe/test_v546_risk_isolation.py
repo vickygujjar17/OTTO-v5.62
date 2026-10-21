@@ -172,8 +172,10 @@ check("otto.mq5 passes the adopted flag into SetTrackedLegs",
 # ----------------------------------------------------------------------
 # 4. THRESHOLD AND DISPATCH UNCHANGED
 # ----------------------------------------------------------------------
+# v5.70: the ceiling is anchored on the PEAK RUNG, not on RiskPercent (T1).
+# The 50% tolerance itself is unchanged -- only the anchor moved.
 check("the 50% tolerance is in force",
-      re.search(r"maxAllowedRiskPct\s*=\s*RiskPercent\s*\*\s*1\.50", CODE) is not None)
+      re.search(r"maxAllowedRiskPct\s*=\s*peakRungPct\s*\*\s*1\.50", CODE) is not None)
 
 check("the breach still dispatches as WARN",
       "HT_SEV_WARN" in CODE

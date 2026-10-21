@@ -106,8 +106,15 @@ check("InpBreakEvenRR default is 1.0",
 check("InpBreakEvenRR no longer defaults to 2.0",
       re.search(r"InpBreakEvenRR\s*=\s*2\.0", DEFS_T) is None)
 
-check("LONG breakeven uses primaryEntry + beOffset",
-      re.search(r"beSL\s*=\s*primaryEntry\s*\+\s*beOffset\s*;", TM_T) is not None)
+check("LONG breakeven rung locks +InpBEProfitLockRR above entry",
+      re.search(r"lockSL\s*=\s*primaryEntry\s*\+\s*\(InpBEProfitLockRR\s*\*\s*rrUnit\)\s*;",
+                TM_T) is not None)
+
+check("LONG friction still feeds the block as a FLOOR (MathMax)",
+      re.search(r"frictionSL\s*=\s*primaryEntry\s*\+\s*CalcBasketFriction\(true\)\s*;",
+                TM_T) is not None and
+      re.search(r"beSL\s*=\s*MathMax\(\s*lockSL\s*,\s*frictionSL\s*\)\s*;", TM_T)
+      is not None)
 
 
 # ----------------------------------------------------------------------
@@ -178,8 +185,15 @@ check("SHORT trail still ratchets forward only",
       re.search(r"dynamicTrail\s*<\s*desiredSL\)\s*desiredSL\s*=\s*dynamicTrail\s*;", TM_T) is not None)
 
 
-check("SHORT breakeven uses primaryEntry - beOffset",
-      re.search(r"beSL\s*=\s*primaryEntry\s*-\s*beOffset\s*;", TM_T) is not None)
+check("SHORT breakeven rung locks -InpBEProfitLockRR below entry",
+      re.search(r"slLock\s*=\s*primaryEntry\s*-\s*\(InpBEProfitLockRR\s*\*\s*rrUnit\)\s*;",
+                TM_T) is not None)
+
+check("SHORT friction still feeds the block as a FLOOR (MathMin)",
+      re.search(r"frictionSL\s*=\s*primaryEntry\s*-\s*CalcBasketFriction\(false\)\s*;",
+                TM_T) is not None and
+      re.search(r"beSL\s*=\s*MathMin\(\s*slLock\s*,\s*frictionSL\s*\)\s*;", TM_T)
+      is not None)
 
 
 
@@ -262,10 +276,10 @@ check("helper NULL-guards the journal pointer",
                 OM_T) is not None)
 
 check("CalcBasketFriction feeds the LONG breakeven block",
-      re.search(r"double\s+beOffset\s*=\s*CalcBasketFriction\(true\)\s*;", TM_T) is not None)
+      re.search(r"double\s+frictionSL\s*=\s*primaryEntry\s*\+\s*CalcBasketFriction\(true\)\s*;", TM_T) is not None)
 
 check("CalcBasketFriction feeds the SHORT breakeven block",
-      re.search(r"double\s+beOffset\s*=\s*CalcBasketFriction\(false\)\s*;", TM_T) is not None)
+      re.search(r"double\s+frictionSL\s*=\s*primaryEntry\s*-\s*CalcBasketFriction\(false\)\s*;", TM_T) is not None)
 
 
 

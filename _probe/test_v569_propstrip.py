@@ -155,8 +155,8 @@ check("AuditDrawdown is no longer DEFINED",
 # it is the only thing left that can catch a runaway position size.
 check("AuditRiskExposure survives the purge",
       re.search(r"void\s+AuditRiskExposure\s*\(", AUD_C) is not None)
-check("the per-leg ceiling is still derived from RiskPercent",
-      re.search(r"RiskPercent\s*\*\s*1\.50", AUD_C) is not None)
+check("the per-leg ceiling is still derived from the PEAK RUNG, not T1",
+      re.search(r"peakRungPct\s*\*\s*1\.50", AUD_C) is not None)
 
 
 # ----------------------------------------------------------------------
@@ -236,7 +236,9 @@ check("README no longer promises a prop-firm safety buffer",
 check("README no longer documents SafetyMaxRiskPct as a live input",
       re.search(r"SafetyMaxRiskPct\s*\|", README) is None)
 check("README documents the tearsheet's replacement ladder",
-      "1.875" in README)
+      "2.25" in README)
+check("README documents the +0.75R profit lock",
+      "InpBEProfitLockRR" in README)
 
 
 def main():

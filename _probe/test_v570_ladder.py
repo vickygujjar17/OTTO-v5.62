@@ -1,50 +1,54 @@
 """
-v5.69 static verification probe - GEOMETRIC RISK CASCADE + FULL BLOCK GEOMETRY.
+v5.70 static verification probe - NON-MONOTONIC RISK TIERS + +0.75R PROFIT LOCK.
 
-Two independent changes are pinned here.
+Three independent changes are pinned here.
 
-  1. THE LADDER IS NOW A GEOMETRIC CASCADE. v5.68 had halved every rung, which
-     turned the v5.61 flat-head shape (T1 == T2) into 0.5 / 0.5 / 0.25 / 0.125.
-     v5.69 restores ONLY T1 and leaves the three scale-ins untouched, so each
-     rung now risks exactly half the rung above it:
-        T1 RiskPercent   0.5   -> 1.0     (at market)
-        T2 InpRiskT2Pct  0.5   -> 0.5     (at +1.0R)  unchanged
-        T3 InpRiskT3Pct  0.25  -> 0.25    (at +2.0R)  unchanged
-        T4 InpRiskT4Pct  0.125 -> 0.125   (at +3.0R)  unchanged
-        summed                 1.375% -> 1.875%
-     The flat-head shape is GONE ON PURPOSE: T1 no longer equals T2, so the
-     old "T1 == T2" assertion is deleted rather than softened. A future edit
-     that re-flattens the head must now red a probe instead of sliding past.
-     Nothing about the GEOMETRY moved: every scale-in trigger, breakeven floor,
-     profit lock and ATR trail rung is an R-multiple of the primary's own 1R,
-     so changing the % risk moves LOTS and MONEY, never the price levels at
-     which the ladder advances. That separation is pinned in section 3,
-     because a future "tune the risk" edit that also touched a trigger would
-     silently re-time the entire trade.
+  1. THE LADDER DEEPENS AT THE CONFIRMED RUNG, THEN TAPERS. v5.69 was a strict
+     geometric cascade (1.0 / 0.5 / 0.25 / 0.125). v5.70 inverts the top of that
+     shape -- T1 is now the PROBE and T2 carries the largest allocation:
+        T1 RiskPercent   1.0   -> 0.5     (at market)
+        T2 InpRiskT2Pct  0.5   -> 1.0     (at +1.0R)
+        T3 InpRiskT3Pct  0.25  -> 0.5     (at +2.0R)
+        T4 InpRiskT4Pct  0.125 -> 0.25    (at +3.0R)
+        summed                 1.875% -> 2.25%
+     The new shape is NON-MONOTONIC (0.5 -> 1.0 -> 0.5 -> 0.25). The v5.69
+     "descends strictly" and "every rung is exactly half" assertions are
+     therefore DELETED, not softened: they encoded the retired cascade and
+     cannot be satisfied by any correct v5.70 tree. What replaces them is the
+     weaker ordering that actually survives -- T2 > T1, T2 > T3, T3 > T4, i.e.
+     the confirmed rung is the peak and the ladder tapers below it. A future
+     edit that restores a monotonic cascade must red here rather than slide by.
+     Nothing about the GEOMETRY moved: every scale-in trigger, profit lock and
+     ATR trail rung is still an R-multiple of the primary's own 1R, so changing
+     the % risk moves LOTS and MONEY, never the price levels at which the ladder
+     advances. That separation is pinned in section 3.
 
-  2. THE JOURNAL PRINTS THE FULL BLOCK GEOMETRY. Both LogSetupArmed() and
-     LogEntry() carry block top / bottom / midpoint / height, and v5.68 added
-     the standalone block height in price AND pips, the 1R stop distance in
-     price AND pips, and the risk allocation actually being committed.
-     LogEntry() additionally prints the REALIZED fill-to-SL distance beside the
-     planned 1R, so a slipped fill is visible in the journal instead of
-     hiding behind the planned number. v5.69 retags the allocation row from
-     "(v5.68 baseline)" to "(equity-based)" because there is no baseline to
-     name any more -- sizing reads live equity at order time.
+  2. THE +1.0R RUNG LOCKS +0.75R. Through v5.69 the +1.0R milestone moved the
+     unified stop to COST-COVERING BREAKEVEN (entry +/- beOffset, i.e. ~+0.0R).
+     v5.70 locks +0.75R instead, via the new InpBEProfitLockRR input. Friction
+     survives as a FLOOR under the lock (MathMax on a LONG, MathMin on a SHORT),
+     so the cost-covering guarantee is preserved rather than discarded and
+     CalcBasketFriction() stays live. The T2 fill carries the same lock as its
+     slOverride, so the largest rung is no longer born in the loosest stop.
+
+  3. THE AUDITOR CEILING IS ANCHORED ON THE PEAK RUNG. A RiskPercent-anchored
+     ceiling would now be 0.5 * 1.5 = 0.75% and would fire a false positive on
+     every healthy 1.0% T2 leg. It is re-anchored on max(T1..T4) * 1.50, which
+     is 1.5% here -- numerically identical to v5.69, so this release neither
+     loosens nor tightens the watchdog, only its anchor.
 
 WHY A PROBE AND NOT JUST THE COMPILER. None of this is visible to MQL5C.
-Doubling a `const double` compiles identically whether or not the auditor's
+Changing a `const double` compiles identically whether or not the auditor's
 tolerance, the pyramid probe's pinned sum, or the documented per-leg rationale
-were updated with it, and a journal row prints the same whether or not the
-value behind it is the number the sizer will commit. So this probe pins the
-NUMBERS, the ARITHMETIC RELATIONSHIP between them, and the ROW STRUCTURE that
-the operator reads. It also pins the NEGATIVE direction: section 2 asserts that
-the dead SafetyMaxRiskPct input and the whole prop-firm group are GONE, not
-merely unused.
+were updated with it. Nor can the compiler notice that a probe still asserts a
+geometric cascade the sources no longer implement. So this probe pins the
+NUMBERS, the ARITHMETIC RELATIONSHIP between them, and the NEGATIVE direction:
+section 2 asserts the retired 1.875% cascade rationale is GONE, not merely
+absent from the code paths.
 
-WHAT IT CANNOT PROVE. That a real fill slips, or that the terminal renders
-the rows exactly as written, are runtime properties. This is static analysis
-of the shipped sources -- no MT5 required.
+WHAT IT CANNOT PROVE. That a real fill slips, or that the terminal renders the
+rows exactly as written, are runtime properties. This is static analysis of the
+shipped sources -- no MT5 required.
 """
 
 import io
@@ -127,40 +131,50 @@ TRADE_C = strip_comments(read(TRADE))
 
 
 # ----------------------------------------------------------------------
-# 1. T1 was restored, the three scale-ins held, and the cascade is CONSISTENT.
+# 1. The ladder deepens at T2 and tapers below it -- NON-MONOTONIC by design.
 # ----------------------------------------------------------------------
-print("\n-- 1. The risk ladder is a geometric cascade --")
+print("\n-- 1. The risk ladder tapers from a confirmed-rung peak --")
 
 T1 = num_input(DEFS_C, "RiskPercent")
 T2 = num_input(DEFS_C, "InpRiskT2Pct")
 T3 = num_input(DEFS_C, "InpRiskT3Pct")
 T4 = num_input(DEFS_C, "InpRiskT4Pct")
 
-check("T1 RiskPercent is 1.0 (restored from v5.68's 0.5)", T1 == 1.0, T1)
-check("T2 InpRiskT2Pct is still 0.5 (not restored with T1)", T2 == 0.5, T2)
-check("T3 InpRiskT3Pct is still 0.25 (untouched since v5.68)", T3 == 0.25, T3)
-check("T4 InpRiskT4Pct is still 0.125 (untouched since v5.68)", T4 == 0.125, T4)
+check("T1 RiskPercent is 0.5 (the probe rung, halved from v5.69's 1.0)",
+      T1 == 0.5, T1)
+check("T2 InpRiskT2Pct is 1.0 (the confirmed rung carries the size)",
+      T2 == 1.0, T2)
+check("T3 InpRiskT3Pct is 0.5", T3 == 0.5, T3)
+check("T4 InpRiskT4Pct is 0.25", T4 == 0.25, T4)
 
 if None not in (T1, T2, T3, T4):
-    # The v5.61 flat head (T1 == T2) is deliberately GONE. Asserted as a strict
-    # inequality so a future edit that re-flattens the ladder reds here.
-    check("the head is no longer FLAT (T1 > T2, flat-head shape retired)",
-          T1 > T2, (T1, T2))
-    check("the ladder descends strictly (T1 > T2 > T3 > T4)",
-          T1 > T2 > T3 > T4, (T1, T2, T3, T4))
-    check("EVERY rung is exactly HALF the one above it (geometric cascade)",
-          abs(T1 / 2.0 - T2) < 1e-12 and abs(T2 / 2.0 - T3) < 1e-12
-          and abs(T3 / 2.0 - T4) < 1e-12, (T1, T2, T3, T4))
+    # The v5.69 geometric cascade (T1 > T2 > T3 > T4, each exactly half the one
+    # above) is RETIRED. Those two assertions are deleted outright: no correct
+    # v5.70 tree can satisfy them, so keeping a softened version would only
+    # preserve a claim the operator has explicitly reversed. What replaces them
+    # is the weaker shape that IS still intended -- T2 is the peak (it is the
+    # only rung taken after the trade has already proven a full R) and the
+    # ladder tapers monotonically below it.
+    check("T2 is the PEAK rung (T2 > T1 and T2 > T3)",
+          T2 > T1 and T2 > T3, (T1, T2, T3))
+    check("the ladder tapers strictly below the peak (T2 > T3 > T4)",
+          T2 > T3 > T4, (T2, T3, T4))
+    check("the ladder is NON-MONOTONIC -- the retired cascade is NOT restored",
+          not (T1 >= T2 >= T3 >= T4), (T1, T2, T3, T4))
+    check("no rung is exactly half the one above it (cascade retired)",
+          not (abs(T1 / 2.0 - T2) < 1e-12 and abs(T2 / 2.0 - T3) < 1e-12
+               and abs(T3 / 2.0 - T4) < 1e-12), (T1, T2, T3, T4))
     total = T1 + T2 + T3 + T4
-    check("the summed stacked exposure is 1.875 (was 1.375 in v5.68)",
-          abs(total - 1.875) < 1e-12, total)
+    check("the summed stacked exposure is 2.25 (was 1.875 in v5.69)",
+          abs(total - 2.25) < 1e-12, total)
     check("no rung rounded to zero or went negative",
           min(T1, T2, T3, T4) > 0.0, min(T1, T2, T3, T4))
 else:
-    for n in ("the head is no longer FLAT (T1 > T2, flat-head shape retired)",
-              "the ladder descends strictly (T1 > T2 > T3 > T4)",
-              "EVERY rung is exactly HALF the one above it (geometric cascade)",
-              "the summed stacked exposure is 1.875 (was 1.375 in v5.68)",
+    for n in ("T2 is the PEAK rung (T2 > T1 and T2 > T3)",
+              "the ladder tapers strictly below the peak (T2 > T3 > T4)",
+              "the ladder is NON-MONOTONIC -- the retired cascade is NOT restored",
+              "no rung is exactly half the one above it (cascade retired)",
+              "the summed stacked exposure is 2.25 (was 1.875 in v5.69)",
               "no rung rounded to zero or went negative"):
         check(n, False, (T1, T2, T3, T4))
 
@@ -169,9 +183,9 @@ check("still no dead InpRiskT1Pct input",
 
 
 # ----------------------------------------------------------------------
-# 2. The prop-firm safety group is GONE, and the auditor ceiling follows T1.
+# 2. The prop-firm group stays deleted; the auditor ceiling follows the PEAK RUNG.
 # ----------------------------------------------------------------------
-print("\n-- 2. Prop-firm safety group deleted; auditor ceiling derived --")
+print("\n-- 2. Prop-firm safety group still deleted; ceiling anchored on the peak --")
 
 # v5.69 deletes the three prop-firm inputs outright rather than keeping them as
 # no-ops, because nothing in the tree ever read them. Absence -- not a value --
@@ -183,19 +197,33 @@ check("the prop-firm group header is deleted",
       "PROP FIRM SAFETY BUFFERS" not in strip_comments(DEFS_T))
 
 # The per-leg budget the dead input pretended to own is enforced at runtime and
-# DERIVED from RiskPercent, so it tracks T1 automatically (1.0 * 1.5 = 1.5%).
-check("the auditor still derives its ceiling from RiskPercent at runtime",
-      re.search(r"RiskPercent\s*\*\s*1\.50", AUD_C) is not None)
+# DERIVED from the PEAK RUNG, so it tracks whichever tier is largest (1.0 * 1.5
+# = 1.5%). It must NOT be anchored on RiskPercent alone: with T1 halved to 0.5 a
+# RiskPercent-anchored ceiling would be 0.75%, below the 1.0% T2 leg, and the
+# watchdog would fire on a perfectly healthy pyramid.
+check("the auditor derives its ceiling from the PEAK RUNG, not from T1",
+      re.search(r"peakRungPct\s*\*\s*1\.50", AUD_C) is not None)
+check("the peak-rung anchor actually takes the max over all four tiers",
+      re.search(r"peakRungPct\s*=\s*MathMax\(\s*RiskPercent\s*,[\s\S]{0,200}"
+                r"InpRiskT2Pct[\s\S]{0,200}InpRiskT3Pct[\s\S]{0,200}InpRiskT4Pct",
+                AUD_C) is not None)
+check("the auditor no longer multiplies RiskPercent alone (T1 is not the peak)",
+      re.search(r"RiskPercent\s*\*\s*1\.50", AUD_C) is None)
 check("the auditor does NOT read the deleted input",
       "SafetyMaxRiskPct" not in AUD_C)
-if None not in (T1, T2):
-    CEILING = T1 * 1.50
+if None not in (T1, T2, T3, T4):
+    CEILING = max(T1, T2, T3, T4) * 1.50
     check("the derived ceiling brackets the peak single leg (1.5%% vs %.3f%%)"
-          % max(T1, T2), max(T1, T2) < CEILING,
-          "%s < %s" % (max(T1, T2), CEILING))
+          % max(T1, T2, T3, T4), max(T1, T2, T3, T4) < CEILING,
+          "%s < %s" % (max(T1, T2, T3, T4), CEILING))
+    # The specific regression this release had to fix: a T1-anchored ceiling.
+    check("a T1-anchored ceiling would indeed have been breached by T2",
+          T2 > T1 * 1.50, (T1 * 1.50, T2))
 
 check("the new ladder is documented in the inputs, so it is not a silent edit",
-      "1.875" in DEFS_T and "GEOMETRIC CASCADE" in DEFS_T)
+      "2.25" in DEFS_T and "NON-MONOTONIC" in DEFS_T)
+check("the retired geometric-cascade rationale is gone from the live inputs",
+      not re.search(r"^// v5\.69: the ladder is a GEOMETRIC CASCADE", DEFS_T, re.M))
 check("the retired flat-head rationale is gone from the live inputs",
       "FLAT-HEAD pyramid" not in strip_comments(DEFS_T))
 
@@ -233,15 +261,14 @@ check("no % risk literal leaked into the trade manager",
 
 # ----------------------------------------------------------------------
 # 4. The auditor's tolerance follows its OWN derived ceiling, not the
-#    deleted input, and the T1 change moved it back to 1.5%.
+#    deleted input, and the peak-rung anchor keeps it at 1.5%.
 # ----------------------------------------------------------------------
 print("\n-- 4. The auditor tolerance is derived, never a literal --")
 
-check("the auditor still derives its ceiling from RiskPercent at runtime",
-      re.search(r"RiskPercent\s*\*\s*1\.50", AUD_C) is not None)
-check("the auditor ceiling was NOT hard-coded to a literal",
-      re.search(r"RiskPercent\s*\*\s*1\.50", AUD_C) is not None and
-      "0.75" not in AUD_C)
+check("the auditor derives its ceiling at runtime, not from a literal",
+      re.search(r"peakRungPct\s*\*\s*1\.50", AUD_C) is not None)
+check("the auditor ceiling was NOT hard-coded to a literal percentage",
+      re.search(r"maxAllowedRiskPct\s*=\s*[0-9]", AUD_C) is None)
 # v5.69 deleted the whole drawdown layer from the auditor; only the per-leg
 # risk check survives, which is what keeps this ceiling meaningful.
 check("the auditor's drawdown machinery is gone",
@@ -250,6 +277,63 @@ check("the auditor's drawdown machinery is gone",
 check("the auditor no longer latches a daily or total DD breach",
       "m_alertSent_DailyDDBreach" not in AUD_C.replace(
           "// v5.69: the drawdown latches (m_alertSent_DailyDDBreach,", ""))
+
+
+# ----------------------------------------------------------------------
+# 4b. The +1.0R rung LOCKS +0.75R instead of parking at cost-covering BE.
+# ----------------------------------------------------------------------
+print("\n-- 4b. The +1.0R rung locks +0.75R (friction kept as a floor) --")
+
+LOCK = num_input(DEFS_C, "InpBEProfitLockRR")
+check("InpBEProfitLockRR exists and is 0.75", LOCK == 0.75, LOCK)
+check("the +1.0R trigger itself is untouched (InpBreakEvenRR still 1.0)",
+      num_input(DEFS_C, "InpBreakEvenRR") == 1.0,
+      num_input(DEFS_C, "InpBreakEvenRR"))
+
+# The lock is applied on BOTH ladder branches AND on the T2 fill override, and
+# each site multiplies the SHARED input by its own rrUnit -- a hard-coded 0.75
+# would drift silently if the input moved. Three sites: LONG, SHORT, T2 fill.
+N_LOCK = len(re.findall(r"InpBEProfitLockRR\s*\*\s*rrUnit", TRADE_C))
+check("the lock is applied on both branches and the T2 fill override",
+      N_LOCK == 3, N_LOCK)
+check("the LONG branch keeps friction as a FLOOR via MathMax",
+      re.search(r"beSL\s*=\s*MathMax\(\s*lockSL\s*,\s*frictionSL\s*\)", TRADE_C)
+      is not None)
+check("the SHORT branch keeps friction as a FLOOR via MathMin",
+      re.search(r"beSL\s*=\s*MathMin\(\s*slLock\s*,\s*frictionSL\s*\)", TRADE_C)
+      is not None)
+# Cost-covering must still be reachable, or the v5.27 guarantee silently died.
+check("CalcBasketFriction() is still consumed, so cost-covering did not go dead",
+      len(re.findall(r"CalcBasketFriction\(", TRADE_C)) >= 3,
+      len(re.findall(r"CalcBasketFriction\(", TRADE_C)))
+# The old outer guard would SKIP the lock for a stop already between entry and
+# +0.75R, leaving the basket under-locked. Only the forward-only test remains.
+check("the retired 'desiredSL < primaryEntry' outer guard is gone",
+      "desiredSL < primaryEntry)" not in TRADE_C and
+      "desiredSL > primaryEntry)" not in TRADE_C)
+check("the ratchet is guarded forward-only on the LONG branch",
+      re.search(r"if\(desiredSL\s*<\s*beSL\)", TRADE_C) is not None)
+check("the ratchet is guarded forward-only on the SHORT branch",
+      re.search(r"if\(desiredSL\s*>\s*beSL\)", TRADE_C) is not None)
+
+# T2 must be BORN wearing the lock, not the old friction-BE. A friction-BE
+# override on the largest rung is the inversion v5.61 fixed for T3.
+check("the T2 fill carries InpBEProfitLockRR as its slOverride",
+      re.search(r"lockRaw\s*=[^\n]*InpBEProfitLockRR\s*\*\s*rrUnit", TRADE_C)
+      is not None)
+check("the T2 fill is clamped against the live session stop",
+      re.search(r"groupSL\s*=\s*\(dir==DIR_LONG\)\s*\?\s*MathMax\(\s*lockRaw\s*,\s*sessionNow2\s*\)"
+                r"[\s\S]{0,120}MathMin\(\s*lockRaw\s*,\s*sessionNow2\s*\)",
+                TRADE_C) is not None)
+check("the T2 group-stop log no longer advertises cost-covering breakeven",
+      "Cost-Covering Breakeven" not in TRADE_C)
+check("the T2 group-stop log names the +0.75R milestone",
+      "+0.75R" in TRADE_C)
+
+# The journal event that fires on the rung must describe what actually happened.
+check("the journal reports a +0.75R profit lock, not a breakeven",
+      "SL -> +0.75R PROFIT LOCK" in MAIN_T and
+      "BREAKEVEN (COST-COVERING)" not in MAIN_T)
 
 
 # ----------------------------------------------------------------------
@@ -371,9 +455,9 @@ check("the shared overshoot factor is untouched",
 STALE = []
 for f in ALL_FILES:
     body = strip_comments(read(os.path.join(ROOT, f)))
-    if "2.75" in body or "1.375" in body:
+    if "2.75" in body or "1.375" in body or "1.875" in body:
         STALE.append(f)
-check("no live code still asserts a retired ladder sum (2.75 / 1.375)",
+check("no live code still asserts a retired ladder sum (2.75 / 1.875 / 1.375)",
       not STALE, STALE)
 
 
@@ -400,7 +484,7 @@ def main():
     passed = sum(1 for _, ok, _ in RESULTS if ok)
     total = len(RESULTS)
     print("=" * 74)
-    print("v5.69 GEOMETRIC RISK CASCADE + FULL BLOCK GEOMETRY - STATIC PROBE")
+    print("v5.70 NON-MONOTONIC RISK TIERS + +0.75R PROFIT LOCK - STATIC PROBE")
     print("=" * 74)
     for name, ok, detail in RESULTS:
         mark = "PASS" if ok else "FAIL"

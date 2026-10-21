@@ -1,12 +1,12 @@
 //+------------------------------------------------------------------+
 //|                                                   OttoDefines.mqh |
-//|             OTTO EA v5.69 — 28-Pair Institutional Master Build |
+//|             OTTO EA v5.70 — 28-Pair Institutional Master Build |
 //|                 Central Definitions / Enums / Input Parameters    |
 //|         Exact MQL5 port of Pine Script "prop_guard_tester.pine"   |
 //+------------------------------------------------------------------+
 #property copyright "OTTO EA - Goat Funded Trader (GFT) Master Build"
-#property version   "5.69"
-#property description "OTTO v5.69 — Goat Funded Trader (GFT) Master Build (Wick1+Wick2 | Separation | Sizing | Broken | Flipped — structural vetoes only)"
+#property version   "5.70"
+#property description "OTTO v5.70 — Goat Funded Trader (GFT) Master Build (Wick1+Wick2 | Separation | Sizing | Broken | Flipped — structural vetoes only)"
 
 #ifndef __OTTO_DEFINES__
 #define __OTTO_DEFINES__
@@ -48,7 +48,7 @@ enum ENUM_TRAIL_STEP
   {
    STEP_NONE       = 0,   // Initial SL — no trail yet
    STEP_HALF_RISK  = 1,   // InpCutRiskRR reached (1.0R) — SL tightened to 0.5R
-   STEP_BREAKEVEN  = 2,   // InpBreakEvenRR reached (1.0R) — SL to cost-covering BE
+   STEP_BREAKEVEN  = 2,   // InpBreakEvenRR reached (1.0R) — SL to +0.75R lock
    STEP_TRAILING   = 3    // InpLockProfitRR reached (3.0R) — step lock + ATR trail
   };
 
@@ -258,7 +258,7 @@ input int      MaxBlockDistance  = 150;        // Max bars between W1 and W2 for
 input int      LookbackBars      = 300;        // Bars the pivot engine may reference
 
 input group "══════════════════════════════════════════════════"
-input group "  [2] STRUCTURAL VETOES — v5.69 (geometry only)"
+input group "  [2] STRUCTURAL VETOES — v5.70 (geometry only)"
 input group "══════════════════════════════════════════════════"
 // v5.63 — AUXILIARY VETO PURGE. This group used to hold six discretion
 // filters (FVG, Momentum, Front-Run, Stale 45D, Near-Miss 6D) plus the
@@ -305,31 +305,43 @@ input double   InpArmATR          = 0.0;      // Arming distance (ATR) — 0 = i
 input bool     InpShiftReversalEntry = false; // RETIRED (v5.52) - no-op, kept for .set compatibility
 input bool     InpPyramidEnable   = true;     // Enable 4-tranche pyramiding (unified group SL)
 // v5.29: Tranche 1 risk continues to flow through RiskPercent in group [6]
-// (v5.69: 1.0%), so there is NO separate InpRiskT1Pct input. The v5.27
+// (v5.70: 0.5%), so there is NO separate InpRiskT1Pct input. The v5.27
 // declaration of one was dead -- nothing in the tree ever read it -- and a
 // second knob that silently changes no behaviour is worse than no knob at all.
-// v5.69: the ladder is a GEOMETRIC CASCADE -- each rung risks exactly half the
-// rung above it. v5.68 had halved every rung, which turned the flat-head shape
-// of v5.61+ into 0.5 / 0.5 / 0.25 / 0.125; v5.69 restores T1 to 1.0% and
-// leaves the three scale-ins where v5.68 put them, so the cascade reads:
-//   T1  1.0%     RiskPercent (group [6])   at market
-//   T2  0.5%     InpRiskT2Pct              at +1.0R  (InpPyramidT2RR)
-//   T3  0.25%    InpRiskT3Pct              at +2.0R  (InpPyramidT3RR)
-//   T4  0.125%   InpRiskT4Pct              at +3.0R  (InpPyramidT4RR)
-// 1.875% is the SUMMED stacked exposure, and that sum is the intended design:
-// each rung is only reached once the rungs beneath it are already wearing a
-// milestone floor (T2 at friction breakeven, T3 at +1.0R, T4 at +2.0R), so the
-// risk actually at stake is always a fraction of the nominal sum.
+// v5.70: the ladder DEEPENS at the confirmed rung and then tapers. This is
+// deliberately NOT the strict geometric cascade of v5.69 (which halved every
+// rung: 1.0 / 0.5 / 0.25 / 0.125). The top rung is now treated as the probing
+// entry it actually is, and the first scale-in -- the one that is only taken
+// once the trade has already travelled a full R and the basket is wearing a
+// +0.75R floor -- carries the largest allocation:
+//   T1  0.5%     RiskPercent (group [6])   at market
+//   T2  1.0%     InpRiskT2Pct              at +1.0R  (InpPyramidT2RR)
+//   T3  0.5%     InpRiskT3Pct              at +2.0R  (InpPyramidT3RR)
+//   T4  0.25%    InpRiskT4Pct              at +3.0R  (InpPyramidT4RR)
+// The shape is therefore NON-MONOTONIC (0.5 -> 1.0 -> 0.5 -> 0.25). Do not
+// "restore" a stricter T1 > T2 rule: any invariant check on this ladder must
+// assert T2 > T1, T2 > T3 and T3 > T4 -- not a descending sequence.
+// 2.25% is the SUMMED stacked exposure. That sum is larger than the nominal
+// per-leg risks suggest, because every rung beyond T2 is sized over the full
+// 1R while its stop sits +0.75R or more on the profit side of its own fill.
+// Nominal and actual therefore deliberately diverge: each rung is only reached
+// once the rungs beneath it are already wearing a milestone floor (T2 at the
+// +0.75R lock, T3 at +1.0R, T4 at +2.0R), so the equity genuinely at stake is
+// always a fraction of the number printed against the rung.
 // The per-leg abort ceiling is NOT an input. CHighTableAuditor::
-// AuditRiskExposure() derives it from RiskPercent itself -- maxAllowedRiskPct =
-// RiskPercent * 1.50 -- and tracks peakRiskPct, the worst SINGLE leg measured
-// from its own entry to the shared basket SL, never the basket sum. It follows
-// T1 automatically, so the ceiling is 1.5% on this ladder. (The v5.29..v5.68
-// SafetyMaxRiskPct input that used to be documented here enforced nothing;
-// v5.69 deleted it with the rest of the prop-firm group.)
-input double   InpRiskT2Pct       = 0.5;      // Tranche 2 risk % of equity (at +1.0R)
-input double   InpRiskT3Pct       = 0.25;     // Tranche 3 risk % of equity (at +2.0R)
-input double   InpRiskT4Pct       = 0.125;    // Tranche 4 risk % of equity (at +3.0R)
+// AuditRiskExposure() derives it from the PEAK RUNG --
+//   maxAllowedRiskPct = max(T1,T2,T3,T4) * 1.50
+// -- and tracks peakRiskPct, the worst SINGLE leg measured from its own entry to
+// the shared basket SL, never the basket sum. It must key off the peak rung and
+// not off RiskPercent: with T1 at 0.5 a RiskPercent-anchored ceiling would be
+// 0.75% and would fire a false "position risk breach" on every healthy 1.0% T2
+// leg. Peak-rung anchoring yields 1.5%, which matches v5.69's value exactly, so
+// the watchdog neither loosens nor tightens across this release. (The
+// v5.29..v5.68 SafetyMaxRiskPct input that used to be documented here enforced
+// nothing; v5.69 deleted it with the rest of the prop-firm group.)
+input double   InpRiskT2Pct       = 1.0;      // Tranche 2 risk % of equity (at +1.0R)
+input double   InpRiskT3Pct       = 0.5;      // Tranche 3 risk % of equity (at +2.0R)
+input double   InpRiskT4Pct       = 0.25;     // Tranche 4 risk % of equity (at +3.0R)
 // v5.27: Tranche 2 is DECOUPLED from InpBreakEvenRR. The two milestones used
 // to share a value (both 2.0), so lowering breakeven to 1.0 would have dragged
 // the T2 scale-in down with it and fired it a full R early. T2 now has its own
@@ -347,7 +359,21 @@ input group "══════════════════════�
 input group "  [5] EXIT & TRAILING (Pine half_risk_rr / be_rr / trail_rr)"
 input group "══════════════════════════════════════════════════"
 input double   InpCutRiskRR   = 1.0;         // Cut Risk in Half at R:R
-input double   InpBreakEvenRR = 1.0;         // Move to Cost-Covering Breakeven at R:R
+input double   InpBreakEvenRR = 1.0;         // +1.0R rung: ratchet SL to a profit lock
+// v5.70: THE +1.0R RUNG IS NO LONGER A NOMINAL BREAKEVEN. Through v5.69 the
+// +1.0R milestone moved the unified stop to COST-COVERING breakeven -- entry
+// plus commission + swap + half-spread, i.e. roughly +0.0R. From v5.70 that rung
+// locks the basket at +0.75R instead, banking three quarters of an R per leg at
+// the same trigger. InpBreakEvenRR still names the R at which the rung fires; it
+// no longer describes where the stop lands. The offset below is that target, and
+// it is the single source for the LONG/SHORT ladder branches in
+// COttoTradeManager as well as the protective stop handed to the T2 fill.
+// COST-COVERING IS STILL THE FLOOR: the branches take
+// MathMax(lock, friction-sl) on a LONG (MathMin on a SHORT), so if friction ever
+// exceeds 0.75R -- only possible on an absurdly tight 1R -- the stop covers
+// costs rather than booking a loss. CalcBasketFriction() is therefore still
+// live, not vestigial.
+input double   InpBEProfitLockRR = 0.75;     // +1.0R rung target: lock SL at +0.75R
 input double   InpTrailStartRR = 2.0;        // Dynamic ATR trail activation R:R
 // v5.29: InpLock3RRR is SUPERSEDED. Every live read of it in COttoTradeManager
 // (both ATR trail gates, both single-ticket push guards and the SyncTradeState
@@ -358,7 +384,7 @@ input double   InpTrailStartRR = 2.0;        // Dynamic ATR trail activation R:R
 // unused input, so it costs nothing.
 // FIX (v5.62): this input now gates the DYNAMIC ATR TRAIL ONLY -- the ATR
 // formula on each branch plus the m_trailActivations tally. The milestone
-// ladder (the +1.0R cost-covering breakeven floor, the +2.0R lock rung and the
+// ladder (the +1.0R +0.75R profit-lock floor, the +2.0R lock rung and the
 // +3.0R lock rung) is applied to the basket UNCONDITIONALLY by its own block
 // in Update(). It used to be nested inside this gate, which made
 // InpTrailStartRR the de facto activation R:R of the whole ladder: raising it
@@ -378,11 +404,14 @@ input double   InpLock3RRR      = 3.0;        // SUPERSEDED by InpTrailStartRR (
 // parallel and wins whenever it computes a tighter stop than the step lock.
 // Set either input to 0.0 to disable the step lock entirely.
 //
-// MILESTONE LADDER: the floors now form an evenly-spaced 1R ladder, and each
-// rung is strictly forward of the one below it --
-//   +1.0R  breakeven (InpBreakEvenRR)  -> stop at primaryEntry +/- beOffset
-//   +2.0R  lock rung 2                 -> stop at +1.0R (InpLockProfit2TargetRR)
-//   +3.0R  lock rung 3                 -> stop at +2.0R (InpLockProfitTargetRR)
+// MILESTONE LADDER: each rung is strictly forward of the one below it --
+//   +1.0R  profit lock 1 (InpBreakEvenRR) -> stop at +0.75R (InpBEProfitLockRR)
+//   +2.0R  lock rung 2                    -> stop at +1.0R (InpLockProfit2TargetRR)
+//   +3.0R  lock rung 3                    -> stop at +2.0R (InpLockProfitTargetRR)
+// v5.70: the lowest rung used to park at cost-covering breakeven (entry +/-
+// beOffset, roughly +0.0R); it now locks +0.75R, so the ladder is spaced
+// 0.75R / 1.0R / 2.0R rather than 0.0R / 1.0R / 2.0R. Friction survives as a
+// FLOOR under the first rung, not as its target -- see InpBEProfitLockRR.
 // The spacing is deliberate: a rung target that fell at or below the rung
 // beneath it would be a no-op, because the lower ratchet already demands a
 // tighter stop. Locking anything looser than the floor already in place would
@@ -399,23 +428,27 @@ input double   InpLockProfit2TargetRR = 1.0; // Step profit lock rung 2 target: 
 input double   InpLockProfitRR       = 3.0;  // Step profit lock trigger (+3.0R)
 input double   InpLockProfitTargetRR = 2.0;  // Step profit lock target: lock SL at +2.0R
 
-// v5.69: RESTORED to 1.0%. v5.68 had halved it to 0.5% together with the three
-// scale-ins; v5.69 puts T1 back and leaves T2/T3/T4 alone, which makes the
-// ladder a geometric cascade (see the 1.875% rationale in group [4]). This is
-// the SINGLE source for T1 sizing -- COttoRiskManager reads it directly and
-// nothing caches it -- and the auditor derives its per-leg ceiling from it, so
-// there is no second knob to keep in step.
+// v5.70: BACK TO 0.5%. v5.68 halved T1 to 0.5%, v5.69 restored it to 1.0% as
+// part of a geometric cascade, and v5.70 returns it to 0.5% -- but for a
+// different reason than v5.68 had. T1 is the PROBE: it is the only rung taken
+// before the setup has proven anything, so it stays deliberately small and the
+// size is loaded onto T2, which is only reached at +1.0R once the basket is
+// already wearing a +0.75R floor. See the group [4] rationale for the full
+// ladder (0.5 / 1.0 / 0.5 / 0.25, sum 2.25%). This is the SINGLE source for T1
+// sizing -- COttoRiskManager reads it directly and nothing caches it -- and the
+// auditor derives its per-leg ceiling from the PEAK rung, so there is no second
+// knob to keep in step.
 input group "══════════════════════════════════════════════════"
 input group "  [6] RISK MANAGEMENT"
 input group "══════════════════════════════════════════════════"
-const double   RiskPercent        = 1.0;      // STRICTLY LOCKED - Terminal cannot override
+const double   RiskPercent        = 0.5;      // STRICTLY LOCKED - Terminal cannot override
 input int      MaxSlippage        = 30;       // Max slippage in points
 input int      MaxRetries         = 3;        // OrderSend retry attempts
 input int      RetryDelayMs       = 500;      // Retry delay (milliseconds)
 input int      MaxSpreadPoints    = 50;       // Max spread (points) for new entries
 
 input group "══════════════════════════════════════════════════"
-input group "  [7] RETIRED NEWS SHIELD — v5.69 (no-ops)"
+input group "  [7] RETIRED NEWS SHIELD — v5.70 (no-ops)"
 input group "══════════════════════════════════════════════════"
 // v5.63 — NEWS SHIELD PURGE. COttoNewsFilter.mqh is deleted: the calendar
 // blackout never fired in production (EnableNewsFilter defaulted to false and
@@ -453,7 +486,7 @@ input ENUM_SIM_SENTIMENT InpSimSentiment = SENT_IGNORE;  // RETIRED (v5.63) - no
 // having no knob at all. MT5 tolerates a .set file naming an absent input.
 
 input group "══════════════════════════════════════════════════"
-input group "  [9] RETIRED VECTOR ENGINE — v5.69 (no-ops)"
+input group "  [9] RETIRED VECTOR ENGINE — v5.70 (no-ops)"
 input group "══════════════════════════════════════════════════"
 // v5.63 — CURRENCY-VECTOR PURGE. COttoCorrelationFilter.mqh is deleted. It
 // carried two distinct things, and BOTH were part of the auxiliary veto layer:
@@ -482,7 +515,7 @@ input int      InpAnchorTF           = PERIOD_H1;  // RETIRED (v5.63) - no-op, k
 input bool     InpCancelOpposingPendings = true; // RETIRED (v5.63) - no-op, kept for .set compatibility
 
 input group "══════════════════════════════════════════════════"
-input group "  [10] HIGH TABLE AUDITOR — v5.69"
+input group "  [10] HIGH TABLE AUDITOR — v5.70"
 input group "══════════════════════════════════════════════════"
 // Decoupled watchdog: audits live state on its OWN timer cadence rather
 // than inside OnTick, so a halted / paused / tick-starved trade loop can
@@ -492,7 +525,7 @@ input bool     InpEnableHighTable       = true;  // Enable High Table watchdog
 input int      InpHighTableAuditSeconds = 5;     // Audit cadence (seconds, >= 1)
 
 input group "══════════════════════════════════════════════════"
-input group "  [11] MANUAL TRADE ADOPTION — v5.69"
+input group "  [11] MANUAL TRADE ADOPTION — v5.70"
 input group "══════════════════════════════════════════════════"
 // Let this EA manage positions opened BY HAND on its own chart symbol.
 // A manual position is identified as a MAGIC-0 position on m_symbol: the
@@ -509,7 +542,7 @@ input int      InpManualNoSLWarnMinutes = 5;     // Re-warn cadence for a manual
 
 //+------------------------------------------------------------------+
 input group "══════════════════════════════════════════════════"
-input group "  [12] RETIRED VETO REVERSAL CONVERSIONS — v5.69"
+input group "  [12] RETIRED VETO REVERSAL CONVERSIONS — v5.70"
 input group "══════════════════════════════════════════════════"
 // v5.34 built five switches that let a vetoed Phase 1 setup be re-used as a
 // Phase 2 REVERSAL instead of being discarded.

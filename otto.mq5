@@ -1,11 +1,11 @@
 //+------------------------------------------------------------------+
 //|                                                       OttoEA.mq5 |
 //|                    OTTO — Goat Funded Trader (GFT) Master Build    |
-//|                    Pine Script Master Build Port (v5.69)            |
+//|                    Pine Script Master Build Port (v5.70)            |
 //|                                    Institutional / Real-Money    |
 //+------------------------------------------------------------------+
 #property copyright "OTTO EA - Goat Funded Trader (GFT) Master Build"
-#property version   "5.69"
+#property version   "5.70"
 #property description "OTTO EA â€” Goat Funded Trader (GFT) Master Build"
 #property description "Structural vetoes only: Separation | Sizing | Broken | Flipped"
 #property description "Modules: Risk | Block Manager | Order Mgmt | Trail"
@@ -103,7 +103,7 @@ int OnInit(void)
    g_symbol = _Symbol;
 
    Print("==============================================================");
-   Print("  OTTO EA v5.69 — 28-Pair Institutional Master Build — INITIALIZING");
+   Print("  OTTO EA v5.70 — 28-Pair Institutional Master Build — INITIALIZING");
    Print("  Symbol: ", g_symbol, " | Magic: ", MagicNumber);
    Print("==============================================================");
 
@@ -564,7 +564,7 @@ void JournalCheckEvents(void)
 
    int be = g_tradeManager.GetBreakevenTriggers();
    if(be > g_lastBE)
-     { g_lastBE = be; JournalWrite("SL -> BREAKEVEN (COST-COVERING)", ""); }
+     { g_lastBE = be; JournalWrite("SL -> +0.75R PROFIT LOCK", ""); }
 
    int trail = g_tradeManager.GetTrailActivations();
    if(trail > g_lastTrail)

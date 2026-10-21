@@ -4,7 +4,7 @@
 //|            OTTO EA - Cut / Cost-BE / ATR Trail / Pyramiding       |
 //+------------------------------------------------------------------+
 #property copyright "OTTO EA - Goat Funded Trader (GFT) Master Build"
-#property version   "5.69"
+#property version   "5.70"
 
 #ifndef __OTTO_TRADE_MANAGER__
 #define __OTTO_TRADE_MANAGER__
@@ -176,7 +176,7 @@ public:
             Print("[TradeManager] INERT RUNG: half-risk rung disabled because ",
                   "InpCutRiskRR (", DoubleToString(InpCutRiskRR,2), ") is not below ",
                   "InpBreakEvenRR (", DoubleToString(InpBreakEvenRR,2), "). ",
-                  "The -0.5R floor can never survive the cost-covering breakeven, ",
+                  "The -0.5R floor can never survive the +0.75R profit lock, ",
                   "so it is never applied and never reported. Journal HALF-RISK ",
                   "lines are suppressed.");
         }
@@ -247,13 +247,21 @@ public:
          // profit-side floor. It has been HOISTED to the end of this branch --
          // see the "HALF-RISK (HOISTED)" block below. Nothing else moved.
          // v5.27: BREAKEVEN AT 1:1 (InpBreakEvenRR lowered 2.0 -> 1.0).
-         // Cost-covering, not nominal: beOffset carries commission + swap +
-         // half-spread, so the stop sits fractionally ABOVE true entry and a
-         // trip there returns the account to flat rather than to a loss.
-         if(currentRR >= InpBreakEvenRR && desiredSL < primaryEntry)
+         // v5.70: the rung no longer parks the stop AT breakeven -- it locks
+         // +inpBEProfitLockRR R (0.75R) of open profit. Cost-covering is kept as
+         // a FLOOR rather than as the target: frictionSL is entry plus
+         // commission + swap + half-spread, so taking the max of the two means a
+         // normal 1R gets the +0.75R lock while a pathologically tight 1R (one
+         // where friction alone exceeds 0.75R) still falls back to covering
+         // costs instead of booking a loss on a "winner".
+         // The guard is the forward-only '<' test: an already-ratcheted stop
+         // sitting between entry and +0.75R must still be pulled up to the lock,
+         // which the previous 'desiredSL < primaryEntry' test would have skipped.
+         if(currentRR >= InpBreakEvenRR)
            {
-            double beOffset = CalcBasketFriction(true);
-            double beSL = primaryEntry + beOffset;
+            double lockSL     = primaryEntry + (InpBEProfitLockRR * rrUnit);
+            double frictionSL = primaryEntry + CalcBasketFriction(true);
+            double beSL       = MathMax(lockSL, frictionSL);
             if(desiredSL < beSL) { desiredSL = beSL; m_breakevenTriggers++; }
            }
          // v5.27: STEP PROFIT LOCK (InpLockProfitRR -> InpLockProfitTargetRR).
@@ -318,10 +326,13 @@ public:
          // v5.32: half-risk rung HOISTED to the end of this branch (mirror of
          // the LONG branch) so its counter means "the -0.5R floor was applied".
          // v5.27: BREAKEVEN AT 1:1 — mirror of the LONG branch above.
-         if(currentRR >= InpBreakEvenRR && desiredSL > primaryEntry)
+         // v5.70: +0.75R profit lock with cost-covering as the floor; see the
+         // LONG branch for why MathMin() is the SHORT mirror of MathMax().
+         if(currentRR >= InpBreakEvenRR)
            {
-            double beOffset = CalcBasketFriction(false);
-            double beSL = primaryEntry - beOffset;
+            double slLock     = primaryEntry - (InpBEProfitLockRR * rrUnit);
+            double frictionSL = primaryEntry - CalcBasketFriction(false);
+            double beSL       = MathMin(slLock, frictionSL);
             if(desiredSL > beSL) { desiredSL = beSL; m_breakevenTriggers++; }
            }
          // v5.27: STEP PROFIT LOCK — mirror of the LONG branch, '<' mirrored to
@@ -364,10 +375,15 @@ public:
       // happened to equal 2.0; lowering breakeven to 1.0 for the 1:1 rule would
       // have silently dragged the T2 scale-in down to 1.0R. The trigger is now
       // independent: add the InpRiskT2Pct tranche, then move the unified basket
-      // stop to exact Cost-Covering Breakeven (entry +/- beOffset, where
-      // beOffset already accounts for broker commission + swap friction).
+      // stop to the +1.0R milestone floor.
       // v5.29: this rung now fires at +1.0R (InpPyramidT2RR = 1.0), which is the
-      // tick on which three things coincide -- the T2 fill, the +1.0R breakeven
+      // tick on which three things coincide -- the T2 fill, the +1.0R milestone
+      // ratchet and the +0.75R profit lock -- so the guard below is set
+      // unconditionally on a successful add.
+      // v5.70: the +1.0R rung locks +0.75R of profit rather than parking at
+      // cost-covering breakeven, so T2 is opened with that +0.75R stop as its
+      // slOverride. See the block below for why it is clamped against the live
+      // session stop.
       //+------------------------------------------------------------------+
       //| v5.32 -- TRANCHE 2 CROSSING TRACE                                |
       //|                                                                  |
@@ -428,26 +444,42 @@ public:
               }
            }
         }
-      // ratchet and the +1.0R ATR-trail activation -- so the guard below is set
+      // ratchet and the +0.75R profit lock -- so the guard below is set
       // unconditionally on a successful add.
       if(currentRR >= InpPyramidT2RR && m_orderManager.IsPyramidPending(2))
         {
-         double beOffset = CalcBasketFriction(dir==DIR_LONG);
-         double groupBE = primaryEntry + (dir==DIR_LONG ? beOffset : -beOffset);
-         // v5.29: hand groupBE to AddPyramidTranche as slOverride so the market
+         // v5.70: T2's protective stop is the SAME +0.75R lock the milestone
+         // ladder above just applied to the basket -- no longer the
+         // cost-covering breakeven it carried through v5.69. Handing this leg a
+         // friction-BE stop while every ticket beneath it already sits at
+         // +0.75R would open the LARGEST rung (InpRiskT2Pct, 1.0%) with the
+         // LOOSEST stop in the basket -- the exact inversion v5.61 fixed for T3.
+         //
+         // CLAMPED AGAINST THE LIVE SESSION STOP, mirroring T3/T4 below. If the
+         // dynamic ATR trail is already tighter than +0.75R, the new leg must
+         // inherit that tighter stop rather than try to loosen the basket back
+         // to the milestone, which ApplyUnifiedSL()'s one-way ratchet would
+         // refuse anyway (leaving the ticket at whatever the fill carried).
+         double lockRaw     = primaryEntry + (dir==DIR_LONG ? 1.0 : -1.0) * (InpBEProfitLockRR * rrUnit);
+         double sessionNow2 = m_orderManager.GetSessionSL();
+         double groupSL = lockRaw;
+         if(sessionNow2 > 0.0)
+            groupSL = (dir==DIR_LONG) ? MathMax(lockRaw, sessionNow2)
+                                      : MathMin(lockRaw, sessionNow2);
+         // v5.29: hand groupSL to AddPyramidTranche as slOverride so the market
          // fill carries its protective stop in the SAME request. T2 previously
          // relied solely on the ApplyUnifiedSL() on the next line, so a skipped
          // or rejected call left the new ticket naked in hedge mode. T3 has
          // always been opened with the override; T2 now matches.
-         if(m_orderManager.AddPyramidTranche(2, groupBE))
+         if(m_orderManager.AddPyramidTranche(2, groupSL))
              {
-              m_orderManager.ApplyUnifiedSL(groupBE);
-              m_orderManager.LogGroupStop("Tranche 2 (+1.0R) - Cost-Covering Breakeven", groupBE);
+              m_orderManager.ApplyUnifiedSL(groupSL);
+              m_orderManager.LogGroupStop("Tranche 2 (+1.0R) - Executed (Unified SL +0.75R)", groupSL);
               // v5.29: bypass the trail/push blocks below for THIS tick only.
-              // The broker needs a moment to register the protective breakeven
-              // stop attached to the brand-new ticket; pushing the tight ATR
-              // trail in the same tick can be rejected as INVALID_STOPS or,
-              // worse, land on the fill and stop the whole basket out on entry.
+              // The broker needs a moment to register the protective stop
+              // attached to the brand-new ticket; pushing the tight ATR trail in
+              // the same tick can be rejected as INVALID_STOPS or, worse, land on
+              // the fill and stop the whole basket out on entry.
               // The normal ATR trail takes over on the next tick.
               trancheOpenedThisTick = true;
              }

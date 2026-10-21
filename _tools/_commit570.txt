@@ -1,0 +1,230 @@
+570: pyramid re-tiered to a NON-MONOTONIC ladder (0.5/1.0/0.5/0.25, sum 2.25%) with the size loaded onto the confirmed rung; the +1.0R rung locks +0.75R instead of parking at cost-covering breakeven; the auditor ceiling re-anchored on the peak rung
+
+RATIONALE
+
+  Two shape changes to the risk model, both aimed at the same asymmetry: the
+  entry is the only leg taken on faith, and the first scale-in is the only leg
+  taken with proof. v5.69 sized them 1.0% and 0.5% -- the largest allocation
+  went to the unproven leg. v5.70 inverts that, and pays the confirmed leg a
+  real profit lock instead of a nominal breakeven.
+
+RISK -- the ladder deepens at T2, then tapers
+
+  v5.69 was a strict geometric cascade, each rung half the one above it. v5.70
+  re-tiers all four and produces the FIRST non-monotonic shape this ladder has
+  had:
+
+      rung                     trigger           v5.69     v5.70
+      T1  RiskPercent          at market          1.0%  ->  0.5%
+      T2  InpRiskT2Pct         +1.0R              0.5%  ->  1.0%
+      T3  InpRiskT3Pct         +2.0R              0.25% ->  0.5%
+      T4  InpRiskT4Pct         +3.0R              0.125% -> 0.25%
+                                                --------     --------
+      summed stacked exposure                  1.875%   ->  2.25%
+
+  T1 is now the PROBE -- the only rung taken before the setup has proven
+  anything -- and T2 carries the size, because it is only reached at +1.0R with
+  the basket already wearing a +0.75R floor. The shape reads
+  0.5 -> 1.0 -> 0.5 -> 0.25: peak at T2, taper below it.
+
+  This is NOT a restore of v5.68 (a flat head, 0.5/0.5/0.25/0.125) and NOT a
+  revert to v5.67 (1.0/1.0/0.5/0.25). It is its own shape.
+
+  Only LOTS and MONEY change on the scale-ins. Every trigger, lock rung and
+  trail activation is still an R-multiple of the primary's own 1R. No formula
+  changed: GetRiskMoney(), CalculateLotSize() and RiskPctLotSize() all read
+  their percentage dynamically at call time.
+
+  NOMINAL vs ACTUAL, stated plainly: 2.25% is the summed NOMINAL exposure and
+  it is the intended design. The equity genuinely at stake is always a fraction
+  of it, because every rung beyond T2 is sized over the full 1R while its stop
+  sits +0.75R or more on the PROFIT side of its own fill. The journal prints the
+  nominal figure against each rung, so it overstates what is at risk once the
+  ladder has advanced. That divergence is deliberate, not a discrepancy to be
+  "fixed" by rescaling T3/T4 down.
+
+EXIT -- the +1.0R rung now LOCKS +0.75R
+
+  Through v5.69 the +1.0R milestone moved the unified stop to COST-COVERING
+  BREAKEVEN: entry plus commission + swap + half-spread, i.e. roughly +0.0R. It
+  now locks +0.75R of open profit at the same trigger, via the new input
+
+      input double InpBEProfitLockRR = 0.75;   // +1.0R rung target
+
+  InpBreakEvenRR still names the R at which the rung FIRES (unchanged at 1.0);
+  it no longer describes where the stop LANDS. That separation is why the target
+  needed its own input rather than a reinterpretation of the old one.
+
+  COST-COVERING IS KEPT AS A FLOOR, not discarded. Both branches compute
+
+      lockSL     = primaryEntry +/- (InpBEProfitLockRR * rrUnit)
+      frictionSL = primaryEntry +/- CalcBasketFriction(dir)
+      beSL       = MathMax(lockSL, frictionSL)   // LONG
+      beSL       = MathMin(slLock, frictionSL)   // SHORT
+
+  so a pathologically tight 1R -- one where friction alone exceeds 0.75R -- still
+  falls back to covering costs rather than booking a loss on a "winner".
+  CalcBasketFriction() is therefore still live code, and a probe asserts it.
+
+  The outer guard changed with the arithmetic. The old
+
+      if(currentRR >= InpBreakEvenRR && desiredSL < primaryEntry)
+
+  would SKIP the rung for any stop already ratcheted to somewhere between entry
+  and +0.75R, leaving the basket under-locked. It is replaced by the
+  forward-only test alone:
+
+      if(desiredSL < beSL) { desiredSL = beSL; m_breakevenTriggers++; }
+
+  which pulls such a stop UP to the lock and can never move one backwards.
+
+T2 IS BORN WEARING THE LOCK
+
+  The T2 fill previously carried friction-BE as its slOverride. With the basket
+  already at +0.75R that would have opened the LARGEST rung (1.0%) with the
+  LOOSEST stop in the book -- the exact inversion v5.61 fixed for T3. It now
+  carries the +0.75R level, CLAMPED against the live session stop exactly as
+  T3/T4 do, so a leg added while the ATR trail is already tighter inherits that
+  tighter stop instead of trying to loosen the basket (which ApplyUnifiedSL()'s
+  one-way ratchet would refuse anyway, leaving the ticket at whatever the fill
+  handed it).
+
+  The group-stop log row is retagged from "Cost-Covering Breakeven" to
+  "Executed (Unified SL +0.75R)".
+
+AUDITOR -- ceiling re-anchored on the PEAK RUNG
+
+  This was the one non-obvious consequence, and getting it wrong would have been
+  worse than the change itself. CHighTableAuditor::AuditRiskExposure() derived
+
+      maxAllowedRiskPct = RiskPercent * 1.50
+
+  With T1 halved to 0.5 that becomes 0.75% -- BELOW the 1.0% T2 leg -- so the
+  watchdog would have fired "position risk breach" on every healthy pyramid. It
+  now anchors on the largest rung:
+
+      double peakRungPct = MathMax(RiskPercent, MathMax(InpRiskT2Pct,
+                              MathMax(InpRiskT3Pct, InpRiskT4Pct)));
+      double maxAllowedRiskPct = peakRungPct * 1.50;
+
+  which is 1.5% -- numerically IDENTICAL to v5.69. The watchdog neither loosens
+  nor tightens across this release; only its anchor moves. The alert text prints
+  peakRungPct so the message names the number actually being enforced.
+
+  peakRiskPct still tracks the worst SINGLE leg from its own entry to the shared
+  basket SL, never the basket sum, so the 2.25% stack is not what it measures.
+
+
+PROBES -- retargeted, and one renamed
+
+  _probe/test_v569_ladder.py -> test_v570_ladder.py   (git mv + retarget)
+
+    The v5.69 "descends strictly (T1 > T2 > T3 > T4)" and "every rung is exactly
+    HALF the one above it" assertions are DELETED, not softened. No correct
+    v5.70 tree can satisfy them, and a weakened version would only preserve a
+    claim the operator has explicitly reversed. They are replaced by the weaker
+    ordering that DOES survive -- T2 > T1, T2 > T3 > T4 -- plus two explicit
+    NEGATIVE assertions that a descending cascade and a halving cascade have not
+    been restored, so a future edit cannot quietly slide back.
+
+    A new section 4b pins the +0.75R lock itself: the input value, the fact that
+    all THREE sites (LONG branch, SHORT branch, T2 fill) multiply the shared
+    input by rrUnit rather than hard-coding 0.75, MathMax/MathMin keeping
+    friction as a floor, CalcBasketFriction() still being consumed, and the
+    retired "desiredSL < primaryEntry" guard being gone.
+
+  test_v52x_pyramid.py    tier pins, ladder shape, ceiling derivation, T2
+                          override name (groupBE -> groupSL), and the +1.0R
+                          floor assertion rewritten around the lock.
+  test_v527_exit_comment.py  the four beOffset assertions rewritten around
+                          lockSL / frictionSL / beSL.
+  test_v569_propstrip.py  ceiling anchor + README ladder sum.
+  test_v546_risk_isolation.py  the "50% tolerance" check follows the anchor.
+  _mutate_ms_milestones.py  three anchors re-pointed at the new text. Two of
+                          them were the reorder anchors -- the retired guard
+                          string -- so BOTH reorder mutants had silently
+                          degraded to SKIP; they catch again now. Also fixed a
+                          latent crash: stage() returns tmp=None when an anchor
+                          is missing, and the note path handed None to
+                          shutil.rmtree(), which raised TypeError and aborted
+                          the run instead of reporting the SKIP.
+
+FILES CHANGED
+
+  OttoDefines.mqh          group [4] rationale rewritten around the
+                           non-monotonic ladder and the peak-rung ceiling; the
+                           T2/T3/T4 defaults re-tiered; RiskPercent 1.0 -> 0.5
+                           (still const); new InpBEProfitLockRR beside
+                           InpBreakEvenRR with its own rationale; the
+                           STEP_BREAKEVEN enum comment, the InpTrailStartRR
+                           paragraph and the MILESTONE LADDER block corrected
+                           (the ladder is spaced 0.75/1.0/2.0R now, not
+                           0.0/1.0/2.0R); group labels re-stamped 5.70 by the
+                           bump.
+  COttoTradeManager.mqh    both +1.0R branches rewritten (lock + friction floor
+                           + forward-only guard); T2 fill carries the clamped
+                           +0.75R stop and the log row is retagged; the INERT
+                           RUNG diagnostic and the PYRAMID block header no
+                           longer claim a cost-covering breakeven.
+  CHighTableAuditor.mqh    peak-rung ceiling with a <=0 fallback; alert text
+                           prints peakRungPct.
+  COttoOrderManager.mqh    cosmetic only: the "exact descending risk tiers"
+                           comment at 3311 claimed a shape the ladder no longer
+                           has. No code.
+  otto.mq5                 journal literal "SL -> BREAKEVEN (COST-COVERING)" ->
+                           "SL -> +0.75R PROFIT LOCK". No logic.
+  README.md                v5.70 Changed section; v5.69 ladder claims marked
+                           superseded; base line bumped.
+  _probe/test_v570_ladder.py                     (git mv + retarget)
+  _probe/test_v52x_pyramid.py, test_v527_exit_comment.py,
+  _probe/test_v569_propstrip.py,
+  _probe/test_v546_risk_isolation.py,
+  _probe/_mutate_ms_milestones.py                (retargeted)
+  _tools/_commit570.txt                          (this file)
+
+
+BEHAVIOURAL DELTA AN OPERATOR SHOULD KNOW
+
+  * The FIRST position is HALF the size it was in v5.69 (0.5% vs 1.0%). A setup
+    that never reaches +1.0R now risks half what it did yesterday.
+  * The FIRST scale-in is DOUBLE (1.0% vs 0.5%). From +1.0R onward the basket
+    carries more nominal risk than v5.69 did, not less -- that is the trade.
+  * A basket stopped out at the +1.0R rung now returns roughly +0.75R per leg
+    instead of roughly flat. Winners keep a real fraction of the move; the old
+    behaviour took a full R of progress and handed it back at cost.
+  * Nothing about WHEN the ladder advances moved: T2 still at +1.0R, T3 at
+    +2.0R, T4 at +3.0R, ATR trail still at +2.0R.
+  * The journal now reads "SL -> +0.75R PROFIT LOCK" where it used to read
+    "SL -> BREAKEVEN (COST-COVERING)". Any operator-side log parsing keyed on
+    the old string needs updating.
+  * An existing .set file that pins InpRiskT2Pct/T3/T4 will OVERRIDE the new
+    defaults and silently keep the v5.69 ladder. Re-save any .set that carries
+    explicit tier values.
+  * InpBEProfitLockRR is a NEW input, so a .set saved before v5.70 loads it at
+    0.75 with an "unknown input" note on the old file; no migration needed.
+
+VALIDATION
+
+  * _tools\build_check.ps1  -> 0 errors, 0 warnings (9975 ms, X64)
+  * full probe suite        -> 28/31 green. Red set unchanged and pre-existing:
+    test_v531_smart_trim.py, test_v532_hightable.py, test_v543_session.py --
+    all three fail on the v5.63 smart-trim / session-state drift that predates
+    this release, none of them touched here.
+  * _probe\_mutate_ms_milestones.py -> 14/14 mutations caught, 0 skipped.
+  * _tools\verify_integrity.py      -> strict CRLF on all 9 sources, 0 bare LF,
+    0 bare CR.
+
+NOT DONE ON PURPOSE
+
+  * No push. v5.68, v5.69 and v5.70 all await operator approval; `origin` stays
+    at v5.67 (f5410d2).
+  * T3/T4 were NOT rescaled to keep the summed nominal at 1.875%. The 2.25% sum
+    is the intended consequence of the requested tiers, and the nominal/actual
+    divergence is documented rather than papered over.
+  * The three drifted probes (v531, v532, v543) were not repaired. They are
+    unrelated to this release, and repairing them here would bury a real
+    behaviour change under test churn.
+  * The ATR trail was not retuned. It still arms at +2.0R, i.e. one full R after
+    the +0.75R lock takes over, so the +1.0R -> +2.0R gap is still carried by
+    the milestone floor alone.
+

@@ -4,7 +4,7 @@
 //|              OTTO EA — exact Pine v4.70 execution port           |
 //+------------------------------------------------------------------+
 #property copyright "OTTO EA - Goat Funded Trader (GFT) Master Build"
-#property version   "5.69"
+#property version   "5.70"
 
 #ifndef __OTTO_ORDER_MANAGER__
 #define __OTTO_ORDER_MANAGER__
@@ -3308,8 +3308,14 @@ public:
          return false;
         }
 
-      // v5.29: exact descending risk tiers, one per rung:
+      // v5.29: exact per-rung risk tiers, one per rung:
       //   T2 = InpRiskT2Pct, T3 = InpRiskT3Pct, T4 = InpRiskT4Pct
+      // v5.70: no longer strictly DESCENDING. The ladder is 1.0 / 0.5 / 0.25 on
+      // the scale-ins because T2 (the confirmed rung, taken with the basket
+      // already at a +0.75R floor) deliberately carries the largest allocation;
+      // only the ordering T2 > T3 > T4 survives. Nothing here enforces a shape
+      // -- each rung reads its own input live, so the ladder can be retuned
+      // without touching this chain.
       // Written as an explicit chain rather than a ternary so that adding a
       // fifth rung is a one-line change, and so an unrecognised tranche can
       // never silently inherit another rung's risk.

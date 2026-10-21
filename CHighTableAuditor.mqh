@@ -5,7 +5,7 @@
 //|        Runs on its own timer cadence, independent of OnTick       |
 //+------------------------------------------------------------------+
 #property copyright "OTTO EA - Goat Funded Trader (GFT) Master Build"
-#property version   "5.69"
+#property version   "5.70"
 
 #ifndef __OTTO_HIGH_TABLE_AUDITOR__
 #define __OTTO_HIGH_TABLE_AUDITOR__
@@ -727,8 +727,18 @@ public:
       double tickValue = SymbolInfoDouble(m_symbol, SYMBOL_TRADE_TICK_VALUE);
       if(tickSize <= 0.0 || tickValue <= 0.0) return;
 
-      // Allow a 50% tolerance buffer over RiskPercent to absorb market execution slippage
-      double maxAllowedRiskPct = RiskPercent * 1.50;
+      // Allow a 50% tolerance buffer over the PEAK RUNG to absorb market
+      // execution slippage.
+      // v5.70: the anchor moved from RiskPercent (T1) to the largest rung. T1 is
+      // now 0.5% while T2 risks 1.0%, so a T1-anchored ceiling would be 0.75%
+      // and would alert on every healthy T2 leg. Peak-rung anchoring keeps the
+      // ceiling at 1.5% here, i.e. numerically identical to v5.69, so this
+      // release neither loosens nor tightens the watchdog -- only its anchor.
+      double peakRungPct = MathMax(RiskPercent,
+                                   MathMax(InpRiskT2Pct,
+                                           MathMax(InpRiskT3Pct, InpRiskT4Pct)));
+      if(peakRungPct <= 0.0) peakRungPct = RiskPercent;
+      double maxAllowedRiskPct = peakRungPct * 1.50;
       double peakRiskPct = 0.0;
       ulong  peakTicket  = 0;
 
@@ -779,7 +789,7 @@ public:
                            " risk is " + DoubleToString(peakRiskPct, 2) +
                            "% of equity, exceeding allowance " +
                            DoubleToString(maxAllowedRiskPct, 2) + "% (Target: " +
-                           DoubleToString(RiskPercent, 2) + "%).",
+                           DoubleToString(peakRungPct, 2) + "%).",
                            HT_SEV_WARN);
         }
       else

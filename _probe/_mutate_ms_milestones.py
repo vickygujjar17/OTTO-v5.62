@@ -37,8 +37,11 @@ FILES = ["otto.mq5", "COttoOrderManager.mqh", "COttoTradeManager.mqh",
 
 HALF_RISK_MARK = "// --- HALF-RISK (HOISTED, v5.32) ---"
 SHORT_MARK = "else // SHORT"
-LONG_BE = "if(currentRR >= InpBreakEvenRR && desiredSL < primaryEntry)"
-SHORT_BE = "if(currentRR >= InpBreakEvenRR && desiredSL > primaryEntry)"
+# v5.70: the +1.0R guard no longer carries the retired "&& desiredSL <
+# primaryEntry" tail -- it locks +InpBEProfitLockRR with friction as a floor, so
+# the branch-level anchor is the bare trigger test.
+LONG_BE = "if(currentRR >= InpBreakEvenRR)"
+SHORT_BE = "if(currentRR >= InpBreakEvenRR)"
 
 
 def unhoist(text, marker, be_anchor):
@@ -68,8 +71,10 @@ MUTATIONS = [
     ("ladder application gate raised above the first rung (gap: +1.0R floor goes dark)",
      "COttoTradeManager.mqh",
      "if(!trancheOpenedThisTick)", "if(currentRR >= InpLockProfit2RR && !trancheOpenedThisTick)"),
-    ("breakeven floor loses the friction offset", "COttoTradeManager.mqh",
-     "double beSL = primaryEntry + beOffset;", "double beSL = primaryEntry;"),
+    ("breakeven rung loses its profit LOCK (target collapses onto entry)",
+     "COttoTradeManager.mqh",
+     "double beSL       = MathMax(lockSL, frictionSL);",
+     "double beSL       = frictionSL;"),
     ("LONG floor ratchet made two-way (stop can move backwards)",
      "COttoTradeManager.mqh",
      "if(lockedSL > desiredSL) desiredSL = lockedSL;", "desiredSL = lockedSL;"),
@@ -79,7 +84,7 @@ MUTATIONS = [
     ("unified-basket one-way ratchet removed (LONG)", "COttoOrderManager.mqh",
      "if(isLong && newSL <= m_sessionSL) return;", "if(false) return;"),
     ("T2 scale-in no longer carries its protective stop", "COttoTradeManager.mqh",
-     "AddPyramidTranche(2, groupBE)", "AddPyramidTranche(2, 0.0)"),
+     "AddPyramidTranche(2, groupSL)", "AddPyramidTranche(2, 0.0)"),
     # v5.61: the T3/T4 fills no longer carry the unified-SL milestone floor, so a
     # fresh leg is born naked (sl=0) in hedge mode instead of wearing the stop the
     # rest of the basket already has.
@@ -201,7 +206,8 @@ def main():
             else:
                 missed.append(name)
         finally:
-            shutil.rmtree(tmp, ignore_errors=True)
+            if tmp:
+                shutil.rmtree(tmp, ignore_errors=True)
 
     print("-- reorder mutations (guard text unchanged) " + "-" * 29)
     for name, fname, branch in REORDER_MUTATIONS:
@@ -221,7 +227,11 @@ def main():
             else:
                 missed.append(name)
         finally:
-            shutil.rmtree(tmp, ignore_errors=True)
+            # stage() returns tmp=None when an anchor is missing, so the note
+            # path above must not hand None to rmtree -- doing so raised a
+            # TypeError that masked the SKIP reason and aborted the whole run.
+            if tmp:
+                shutil.rmtree(tmp, ignore_errors=True)
 
     print("-" * 74)
     total = len(MUTATIONS) + len(REORDER_MUTATIONS) - len(skipped)
