@@ -700,8 +700,12 @@ if LOGADOPT is not None:
           LOGADOPT.find("slPips") < LOGADOPT.find("Initial Risk (1R)"))
     check("the derived 1R rides on the slDistance the caller was handed",
           re.search(r"FmtPrice\(\s*slDistance\s*\)\s*\+", LOGADOPT) is not None)
+    # v5.69: the journal NOTE no longer names a "DD halt" -- the drawdown layer
+    # is deleted, so the sentence now reads "trail, ladder, trim and the basket
+    # close". Asserting the ABSENCE keeps the row honest: it must describe only
+    # machinery that exists.
     check("the record states that the full basket machinery now applies",
-          "DD halt" in LOGADOPT and "close all now apply" in LOGADOPT)
+          "DD halt" not in LOGADOPT and "close all now apply" in LOGADOPT)
     check("the record does not fabricate a Pine block",
           "SSniperBlock" not in LOGADOPT)
 

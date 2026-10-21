@@ -5,7 +5,7 @@
 //|        Runs on its own timer cadence, independent of OnTick       |
 //+------------------------------------------------------------------+
 #property copyright "OTTO EA - Goat Funded Trader (GFT) Master Build"
-#property version   "5.68"
+#property version   "5.69"
 
 #ifndef __OTTO_HIGH_TABLE_AUDITOR__
 #define __OTTO_HIGH_TABLE_AUDITOR__
@@ -51,9 +51,10 @@
 //|        state straight from the terminal, so there is no shared    |
 //|        object graph to corrupt and nothing to keep in sync.       |
 //|     2. Its entry point (RunAudit) is driven by OnTimer, NOT by    |
-//|        OnTick. An OnTick that early-returns (halted, paused, no   |
-//|        ticks arriving) can no longer silence the watchdog, and a  |
-//|        fault in the audit path cannot unwind basket state.        |
+//|        OnTick. An OnTick that early-returns (no ticks arriving)    |
+//|        can no longer silence the watchdog, and a fault in the      |
+//|        audit path cannot unwind basket state. v5.69: OnTick no     |
+//|        longer has a halted/paused early return to worry about.     |
 //|     3. Every write is confined to its own CSV handle, opened and  |
 //|        closed per dispatch, so a failed write cannot leave a      |
 //|        dangling handle behind for the trade path to trip over.    |
@@ -79,9 +80,11 @@ private:
    //| condition is observed healthy again -- so one incident produces   |
    //| exactly one email, and the NEXT incident emails again.            |
    //+------------------------------------------------------------------+
-   bool              m_alertSent_DailyDDBreach;      // daily DD soft breach
-   bool              m_alertSent_TotalDDBreach;      // total DD hard breach
-   bool              m_alertSent_Halt;               // permanent halt latched
+   // v5.69: the drawdown latches (m_alertSent_DailyDDBreach,
+   // m_alertSent_TotalDDBreach, m_alertSent_Halt) are deleted with the
+   // drawdown layer they guarded. m_alertSent_RiskBreach stays: the
+   // per-leg risk audit is independent of the prop-firm machinery and
+   // is still dispatched by AuditRiskExposure().
    bool              m_alertSent_OrderRejectSpike;   // broker reject burst
    bool              m_alertSent_StopModifyFailure;  // SL modify rejected
    // v5.32 Part 2: this latch used to be declared OUTSIDE the class, after
@@ -112,16 +115,13 @@ private:
    long              m_stopModifyFailures;   // current pushed SL-modify fails
    long              m_stopModifySeen;       // total at the previous cycle
 
-   //| Drawdown bases. PUSHED from otto.mq5 rather than read out of the    |
-   //| terminal's GlobalVariables: the GV key format ("OTTO_<key>_<login>")|
-   //| is private to otto.mq5, and re-implementing it here would be a      |
-   //| second, silently drift-prone source of truth for the trailing floor.|
-   //| otto.mq5 pushes the same live values it enforces, so the auditor's  |
-   //| reading can never disagree with the EA's.                           |
-   double            m_dailyResetBalance;    // pushed daily anchor
-   double            m_equityHwm;            // pushed all-time equity HWM
-   bool              m_totalHalted;          // pushed g_totalDD_Halted
-   bool              m_haveBaseline;         // false until the first push
+   //| Drawdown bases -- REMOVED (v5.69). The daily reset anchor, the all-   |
+   //| time equity high-water mark and the permanent halt latch no longer    |
+   //| exist in the tree, so the auditor has nothing to mirror. The four     |
+   //| members that stood here (m_dailyResetBalance, m_equityHwm,            |
+   //| m_totalHalted, m_haveBaseline), the SetSafetyBaseline() push, the     |
+   //| DailyDDPct()/TotalDDPct() measures and the AuditDrawdown() body are   |
+   //| all deleted. Risk sizing is audited from live terminal state alone.   |
 
    //| The tracked PRIMARY ticket, pushed from the order layer. This is   |
    //| the one piece of the trade path's belief that the terminal cannot   |
@@ -209,8 +209,10 @@ private:
    //| is what makes the auditor structurally incapable of mutating      |
    //| basket state -- the decoupling contract at the top of this file.  |
    //| The one thing the terminal cannot tell us (which leg is the       |
-   //| PRIMARY, and what the trailing drawdown anchors are) is PUSHED in |
-   //| via the Notify*/SetSafetyBaseline ingress points instead.         |
+   //| PRIMARY) is PUSHED in through the Notify* ingress points instead. |
+   //| v5.69: the trailing-drawdown anchors used to be pushed here too;  |
+   //| they no longer exist, so Notify*/SetSafetyBaseline is Notify*     |
+   //| only.                                                             |
    //+------------------------------------------------------------------+
    int               CountBookLegs(void) const
      {
@@ -274,19 +276,8 @@ private:
       return false;
      }
 
-   double            DailyDDPct(void) const
-     {
-      double equity = AccountInfoDouble(ACCOUNT_EQUITY);
-      if(m_dailyResetBalance <= 0.0) return 0.0;
-      return 100.0 * (m_dailyResetBalance - equity) / m_dailyResetBalance;
-     }
-
-   double            TotalDDPct(void) const
-     {
-      double equity = AccountInfoDouble(ACCOUNT_EQUITY);
-      if(m_equityHwm <= 0.0) return 0.0;
-      return 100.0 * (m_equityHwm - equity) / m_equityHwm;
-     }
+   // v5.69: DailyDDPct() and TotalDDPct() are deleted with the drawdown
+   // layer. They divided by the pushed anchors, which no longer exist.
 
 public:
                      CHighTableAuditor(void)
@@ -315,13 +306,6 @@ public:
       m_trackedAdopted         = false;
       m_stateSkewSeen          = false;
       m_adoptionSeen           = false;
-      m_dailyResetBalance      = 0.0;
-      m_equityHwm              = 0.0;
-      m_totalHalted            = false;
-      m_haveBaseline           = false;
-      m_alertSent_DailyDDBreach      = false;
-      m_alertSent_TotalDDBreach      = false;
-      m_alertSent_Halt               = false;
       m_alertSent_OrderRejectSpike   = false;
       m_alertSent_StopModifyFailure  = false;
       m_alertSent_StateInconsistency = false;
@@ -387,27 +371,11 @@ public:
    long              GetRejectsObserved(void)      const { return m_rejectCount; }
    long              GetStopModifyFailures(void)   const { return m_stopModifyFailures; }
 
-   //+------------------------------------------------------------------+
-   //| Pushes the live drawdown anchors.                                 |
-   //|                                                                   |
-   //| otto.mq5 owns g_dailyResetBalance, g_equityHighWaterMark and      |
-   //| g_totalDD_Halted. Re-deriving them here from GlobalVariables would |
-   //| mean re-implementing otto.mq5's private "OTTO_<key>_<login>" key  |
-   //| format -- a second source of truth for the trailing floor, and    |
-   //| exactly the kind of silent divergence the decoupling contract is  |
-   //| meant to prevent. So the EA pushes the values it is actually      |
-   //| enforcing, and the auditor can never disagree with them.          |
-   //|                                                                   |
-   //| Called every OnTick, so it is intentionally trivial.              |
-   //+------------------------------------------------------------------+
-   void              SetSafetyBaseline(double dailyResetBalance, double equityHwm,
-                                       bool totalHalted)
-     {
-      m_dailyResetBalance = dailyResetBalance;
-      m_equityHwm         = equityHwm;
-      m_totalHalted       = totalHalted;
-      m_haveBaseline      = true;
-     }
+   //| v5.69: SetSafetyBaseline() is DELETED. It pushed the daily reset    |
+   //| anchor, the equity high-water mark and the halt latch from otto.mq5, |
+   //| which no longer holds any of them. The auditor now derives every     |
+   //| risk judgement from live terminal state alone, so there is no pushed |
+   //| baseline to go stale and no second source of truth to drift from.    |
 
    //| Pushes the order layer's belief about the trade it is driving.      |
    //|                                                                     |
@@ -565,16 +533,16 @@ public:
    //+------------------------------------------------------------------+
    //| RunAudit - the watchdog's own cadence.                            |
    //|                                                                   |
-   //| Called from OnTimer, never from OnTick, so a halted or paused     |
-   //| trade loop cannot silence the audit. Each check below is          |
-   //| self-contained and purely observational: it reads terminal state  |
-   //| and dispatches at most one latched alert.                         |
+   //| Called from OnTimer, never from OnTick, so the trade loop cannot  |
+   //| silence the audit. Each check below is self-contained and purely  |
+   //| observational: it reads terminal state and dispatches at most one |
+   //| latched alert. v5.69: AuditDrawdown() is deleted with the         |
+   //| prop-firm drawdown layer, leaving three checks.                   |
    //+------------------------------------------------------------------+
    void              RunAudit(void)
      {
       if(!m_ready) return;
 
-      AuditDrawdown();          // PART 2 - daily / total DD
       AuditOrderHealth();       // PART 2 - rejects + SL modify failures
       AuditStateConsistency();  // PART 2 - book vs tracked basket
       AuditRiskExposure();      // PART 2 - dynamic position risk audit
@@ -587,7 +555,7 @@ public:
    datetime          GetLastAudit(void)        const { return m_lastAudit; }
 
    //+------------------------------------------------------------------+
-   //| PART 2 - the four observation bodies.                             |
+   //| PART 2 - the three observation bodies.                            |
    //|                                                                   |
    //| Each body is self-contained, purely observational, and dispatches |
    //| at most one LATCHED alert. The latch lifecycle is uniform: raise  |
@@ -595,55 +563,10 @@ public:
    //| healthy again, so one incident produces exactly one email and the |
    //| next incident emails again.                                       |
    //|                                                                   |
-   //| Every threshold is the LIVE input, never a literal, and the daily |
-   //| and trailing-total comparisons are in PERCENT units to match      |
-   //| otto.mq5.                                                         |
+   //| Every threshold is a LIVE input or a named constant, never an     |
+   //| inline literal. v5.69 removed the fourth body (AuditDrawdown) and |
+   //| the daily/trailing percentage comparisons that went with it.      |
    //+------------------------------------------------------------------+
-   void              AuditDrawdown(void)
-     {
-      // --- Permanent halt. PUSHED, because the halt flag can survive a
-      //     restart in a GlobalVariable and be set before OnTick ever
-      //     reaches the safety block. DELIBERATELY NEVER CLEARED: the halt
-      //     is permanent by design (otto.mq5 only ever sets it), so
-      //     re-arming this latch would be meaningless at best and a
-      //     misreport at worst. ---
-      if(m_totalHalted)
-         DispatchAlertOnce(m_alertSent_Halt,
-                           "HighTable: EA PERMANENTLY HALTED",
-                           "Total trailing drawdown halt is latched. The EA will not "
-                           "place or manage orders until it is manually re-armed.");
-
-      // The remaining two measures are meaningless without the trailing
-      // anchors, so a push that has not arrived yet is reported as nothing
-      // rather than as a breach of zero.
-      if(!m_haveBaseline) return;
-
-      // --- Daily soft breach: pauses new orders, clears at the session
-      //     rollover when otto.mq5 re-anchors g_dailyResetBalance, which
-      //     in turn drops this measure back under the limit and re-arms
-      //     the latch through the ClearLatch below. ---
-      double dailyDD = DailyDDPct();
-      if(dailyDD >= SafetyDailyDDLimit)
-         DispatchAlertOnce(m_alertSent_DailyDDBreach,
-                           "HighTable: daily drawdown limit breached",
-                           "Daily DD " + DoubleToString(dailyDD, 2) +
-                           "% >= " + DoubleToString(SafetyDailyDDLimit, 2) +
-                           "% - new orders paused");
-      else
-         ClearLatch(m_alertSent_DailyDDBreach);
-
-      // --- Total trailing hard breach. Like the halt, this one is NEVER
-      //     cleared: the trailing floor only ratchets down, so once the
-      //     breach is real it is terminal. Re-arming could only produce a
-      //     second email for the same permanent condition. ---
-      double totalDD = TotalDDPct();
-      if(totalDD >= SafetyTotalDDLimit)
-         DispatchAlertOnce(m_alertSent_TotalDDBreach,
-                           "HighTable: total trailing drawdown breached",
-                           "Total DD " + DoubleToString(totalDD, 2) +
-                           "% >= " + DoubleToString(SafetyTotalDDLimit, 2) + "%");
-     }
-
    void              AuditOrderHealth(void)
      {
       // --- Broker reject BURST. A delta, not a lifetime total: the total

@@ -4,7 +4,7 @@
 //|              OTTO EA — exact Pine v4.70 execution port           |
 //+------------------------------------------------------------------+
 #property copyright "OTTO EA - Goat Funded Trader (GFT) Master Build"
-#property version   "5.68"
+#property version   "5.69"
 
 #ifndef __OTTO_ORDER_MANAGER__
 #define __OTTO_ORDER_MANAGER__
@@ -352,7 +352,7 @@ private:
      }
 
    //| Drops every arm lock held by the current book. Used by the paths  |
-   //| that empty m_virtualOrders[] wholesale (deinit / DD halt / basket |
+   //| that empty m_virtualOrders[] wholesale (deinit / basket close),   |
    //| close), which never call RemoveVirtualOrderAt() per element and so |
    //| would otherwise orphan their global variables in the terminal.    |
    void                    ReleaseAllVirtualArmLocks(void)
@@ -1749,8 +1749,8 @@ private:
       if(m_journal == NULL) return;
 
       // ---- Basket-aggregated logging -------------------------------
-      // A pyramid basket is closed as a UNIT (unified SL / reversal /
-      // DD halt). Aggregating the tranches into ONE exit record keeps
+      // A pyramid basket is closed as a UNIT (unified SL / reversal).
+      // Aggregating the tranches into ONE exit record keeps
       // the journal in 1:1 correspondence with the actual trade, and
       // guarantees no tranche is left unlogged (orphaned) when more
       // than one position was open.
@@ -2389,7 +2389,8 @@ public:
       // the news shield / macro-veto layer is gone, so no gate stands here.
       // Adoption is still refused by every gate above and by the no-SL check
       // below, so the "do not take risk right now" intent survives as the
-      // daily-DD pause / total-DD halt handled by the EA before OnTick work.
+      // structural gates alone. v5.69: the daily-DD pause / total-DD halt
+      // that used to reinforce it are deleted with the drawdown layer.
 
       // ---- Gate 3: locate the OLDEST magic-0 position on this symbol ----
       // Oldest-wins with POSITION_TIME as the tie-break, matching
@@ -3143,7 +3144,7 @@ public:
      }
 
    //+------------------------------------------------------------------+
-   //| Cancels ALL resting pending orders (deinit / DD halt)          |
+   //| Cancels ALL resting pending orders (deinit)                    |
    //+------------------------------------------------------------------+
    void              CancelAllPendingOrders(void)
      {
@@ -3158,7 +3159,7 @@ public:
          DeleteOrder(t);
         }
       // v5.49: release the cross-chart arm locks this chart published before
-      // the in-memory book is emptied (deinit / DD halt path).
+      // the in-memory book is emptied (deinit path).
       ReleaseAllVirtualArmLocks();
       ArrayResize(m_virtualOrders, 0, 3);
       m_virtualCount = 0;

@@ -4,7 +4,7 @@
 //|              OTTO EA — Institutional risk manager                |
 //+------------------------------------------------------------------+
 #property copyright "OTTO EA - Goat Funded Trader (GFT) Master Build"
-#property version   "5.68"
+#property version   "5.69"
 
 #ifndef __OTTO_RISK_MANAGER__
 #define __OTTO_RISK_MANAGER__
@@ -186,7 +186,9 @@ public:
 
    //+------------------------------------------------------------------+
    //| Core lot-size calculation. Returns exact lot to risk the target  |
-   //| amount, or 0.0 to signal a prop-firm abort.                      |
+   //| amount, or 0.0 to signal an abort (bad symbol properties / bad    |
+   //| stop distance). v5.69: sizing is pure equity-based -- there is no |
+   //| prop-firm drawdown state left to refuse on.                      |
    //+------------------------------------------------------------------+
    double            CalculateLotSize(double entryPrice, double stopLossPrice)
      {

@@ -1,6 +1,18 @@
 """
 Logic verification for the v5.23 daily-reset timestamp fix.
 
+TOMBSTONE (v5.69) -- THIS MODEL NO LONGER DESCRIBES THE SHIPPED EA.
+`CheckDailyReset()` and the 00:00 anchor it maintained are deleted with the rest
+of the prop-firm drawdown layer, so the bug this file pins can no longer occur;
+there is no reset clock left to get the boundary wrong.
+
+It is retained DELIBERATELY. It is a pure-Python model that never reads the MQL5
+sources, so it keeps passing and cannot hide a regression in the tree. The
+boundary arithmetic (why a D1 bar is the wrong basis, why a 00:00 *server*
+boundary is the right one, and what happens across a session rollover) stays
+recorded here so a future reinstatement can reuse the cases rather than
+re-derive them. The live absence contract is `_probe/test_v569_propstrip.py`.
+
 The bug this pins: `CheckDailyReset()` and `OnInit()` derived the reset anchor
 with
 

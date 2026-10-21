@@ -1,0 +1,306 @@
+569: T1 restored to 1.0% as a geometric cascade (1.0/0.5/0.25/0.125, sum 1.875%); the entire prop-firm drawdown layer deleted, sizing pure equity-based
+
+RATIONALE
+
+  Two requests, one release: put the initial risk back where it was before
+  v5.68 halved it, and strip every trace of the prop-firm drawdown /
+  evaluation machinery. Both are shape changes to the risk model rather than
+  tuning, so they land together and the ladder is documented as one coherent
+  design instead of two half-states.
+
+RISK -- T1 restored, the three scale-ins NOT
+
+  v5.68 halved all four rungs, which turned the v5.61+ FLAT HEAD into
+  0.5 / 0.5 / 0.25 / 0.125. v5.69 restores ONLY T1 and leaves T2/T3/T4 exactly
+  where v5.68 put them:
+
+      rung                     trigger           v5.68     v5.69
+      T1  RiskPercent          at market          0.5%  ->  1.0%
+      T2  InpRiskT2Pct         +1.0R              0.5%      0.5%   unchanged
+      T3  InpRiskT3Pct         +2.0R              0.25%     0.25%  unchanged
+      T4  InpRiskT4Pct         +3.0R              0.125%    0.125% unchanged
+                                                --------     --------
+      summed stacked exposure                  1.375%   ->  1.875%
+
+  This is NOT a revert of v5.68 and it is NOT a restore of v5.67. It is
+  v5.68's ladder with the head doubled, which makes the ladder a strict
+  GEOMETRIC CASCADE: every rung risks exactly half the rung above it. The
+  flat head (T1 == T2) that v5.61 established is deliberately GONE, and the
+  4th rung stays at 0.125% rather than being rescaled.
+
+  Only LOTS and MONEY change. Every scale-in trigger, breakeven floor, profit
+  lock and ATR-trail rung is an R-multiple of the primary's own 1R, so no
+  price level moves and no milestone re-times. No formula changed:
+  GetRiskMoney(), CalculateLotSize() and RiskPctLotSize() all read
+  RiskPercent dynamically at call time.
+
+  The per-leg abort ceiling moves with T1 for free, because it was never an
+  input: CHighTableAuditor::AuditRiskExposure() derives
+  maxAllowedRiskPct = RiskPercent * 1.50, so it reads 1.5% on this ladder.
+  That is numerically the same as the dead SafetyMaxRiskPct default, which is
+  a coincidence of the two constants, not a wiring -- nothing ever connected
+
+PROP-FIRM DRAWDOWN LAYER -- DELETED IN FULL
+
+  Sizing is now PURE EQUITY-BASED: RiskPercent% of live equity at order time,
+  with no drawdown circuit breaker of any kind. Removed outright, with no
+  no-op stubs left behind:
+
+    * the 3% daily drawdown pause (cancelled pendings, blocked placement for
+      the rest of the session)
+    * the 5% trailing total drawdown halt (closed the whole basket, cancelled
+      every pending order, permanently halted the EA)
+    * the 00:00 MT5 server-time reset clock: MostRecentServerMidnight() and
+      CheckDailyReset()
+    * the MT5 GlobalVariable persistence layer: OttoGvName/LoadDouble/
+      LoadFlag/Store/StoreFlag and PersistSafetyState(). The EA now writes no
+      drawdown state to the terminal's shared GV store, so a VPS restart can
+      no longer resurrect a stale pause, halt or high-water mark.
+    * the equity high-water mark and the daily reset anchor globals
+    * OnTick's entire STEP 0 block (equity HWM ratchet, both breach branches,
+      the breach-path CancelAllPendingOrders/CloseEntireBasket, and the
+      g_totalDD_Halted early return at the top of the handler)
+    * the !g_dailyDD_Paused wrapper around PlaceOrdersForArmedBlocks(), so
+      placement is now unconditional at STEP 4
+    * the DailyDD/TotalDD columns in LogStatus() and in the init banner
+    * CHighTableAuditor's mirror: AuditDrawdown(), DailyDDPct(), TotalDDPct(),
+      SetSafetyBaseline(), the four pushed members and the three DD latches.
+      AuditRiskExposure() SURVIVES -- the per-leg runaway-size check is not
+      part of the drawdown layer and is now the only risk watchdog left.
+
+  The three prop-firm inputs are DELETED, not retired to no-ops:
+
+      SafetyMaxRiskPct    1.5   -- never read by anything in the tree
+      SafetyDailyDDLimit  3.0   -- only the deleted daily pause read it
+      SafetyTotalDDLimit  5.0   -- only the deleted trailing halt read it
+
+  This breaks with the v5.63 pattern on purpose. The retired veto inputs
+  ([7] news, [9] vector) were LIVE READS that got switched off, so an old
+  .set file legitimately still carries them and keeping the declarations
+  costs nothing. These three never affected behaviour at any point, and a
+  knob that silently changes nothing is worse than no knob -- it advertises a
+  limit the EA does not enforce. MT5 tolerates a .set naming an absent input.
+
+  Group [8] PROP FIRM SAFETY BUFFERS is gone from the input roster. Groups
+  [9]-[12] keep their numbers; the gap in the numbering is intentional and
+  documented in place, because renumbering would invalidate every screenshot,
+  .set comment and journal reference to "[10] HIGH TABLE AUDITOR".
+
+
+PROBES -- retargeted, inverted, and one new absence guard
+
+  test_v568_halfrisk.py -> test_v569_ladder.py (renamed, retargeted)
+
+      The whole v5.68 subject matter is gone: no rung is halved any more and
+      the flat head no longer exists. Rather than delete the file, it is
+      retargeted at v5.69's design:
+
+        * RELEASE is now auto-detected from the source stamp. v5.68 was the
+          only probe that hardcoded it ("5.68"), which is why a version bump
+          used to require editing a probe; every other probe already
+          auto-detects.
+        * pins 1.0 / 0.5 / 0.25 / 0.125 and the sum 1.875
+        * asserts T1 > T2 STRICTLY and T1 > T2 > T3 > T4, so a future edit
+          that re-flattens the head reds instead of sliding through
+        * asserts EVERY rung is exactly half the one above it (cascade)
+        * the old "T1 == T2" assertion is DELETED, not softened
+        * SafetyMaxRiskPct assertions INVERTED to demand absence
+        * new: the auditor's derived ceiling still brackets the peak leg
+        * new: no live code asserts a retired sum (2.75 or 1.375)
+
+  test_v52x_pyramid.py -- ladder pins updated
+
+      T1 1.0, strict cascade, sum 1.875. The per-leg budget check is
+      re-pointed from the deleted SafetyMaxRiskPct input to the derivation
+      that actually enforces it (RiskPercent * 1.50), and a new check pins
+      that the input itself is gone.
+
+  test_v569_propstrip.py -- NEW, 61 checks
+
+      A dedicated ABSENCE guard. Every other probe asserts what the tree now
+      DOES; this one asserts what it must no longer CONTAIN, which is a
+      different failure mode -- the compiler catches a straggler reference,
+      but it cannot see a re-added input nobody reads, a re-opened GV key, or
+      a journal row still promising a halt the EA cannot perform. Checks:
+
+        1  the three inputs are gone as input AND as const
+        2  all seven DD globals appear in no live code; all nine DD helper
+           functions are neither defined nor called
+        3  the auditor names none of the deleted members, drives no
+           AuditDrawdown(), and STILL exposes AuditRiskExposure()
+        4  placement is ungated; the five safety GV keys are never written
+        5  the journal/README/banner stop advertising a drawdown
+
+  INVERTED IN PLACE, not deleted (precedent: _tools/_remove567.py + f5410d2)
+
+      A check that witnesses a deletion is more valuable than an absent
+      check, because it fails if the machinery comes back. Four files:
+
+        test_v563_noveto.py:252   "placement IS gated on the DD pause"
+                           -> "placement is NOT gated" (x2: pause + halt)
+        test_v533_adoptmanual.py  NOTE must contain "DD halt"
+                           -> NOTE must NOT contain "DD halt"
+        test_v528_hotfix.py       five blocks: CheckDailyReset body/shape,
+                                  the NY-clock helper family, the floatingLoss
+                                  rule, the Halted persist/restore pair and
+                                  the 5% trailing bridge -> all inverted
+        test_v532_hightable.py    latch floor 6 -> 4, AuditDrawdown dropped
+                                  from the body list, DailyDDPct/TotalDDPct
+                                  and the two DD threshold comparisons
+                                  inverted, SetSafetyBaseline + its push
+                                  inverted
+        test_v545_throttle.py     latched call-site floor 7 -> 4, with the
+                                  reason recorded (the three DD latches are
+                                  gone; the throttle contract is unchanged)
+
+  TOMBSTONED, deliberately not deleted
+
+      test_v522_safety.py, test_v523_dailyreset.py and test_v525_persistence.py
+      model the deleted layer in pure Python. They never read the MQL5
+      sources, so they keep passing and cannot mask a regression -- what they
+      still buy is the arithmetic (DD formulas, the reset-boundary cases, the
+      stale-store scenarios), ready to be re-pointed if a breaker is ever
+      reinstated. Each now carries a TOMBSTONE header saying exactly that, and
+      v525's "if the .mq5 drifts, these checks fail" contract is marked VOID.
+
+
+DOCS
+
+  README.md gains a "Changed in v5.69" section (4-rung cascade table plus an
+  explicit note that the flat head is intentionally retired) and a "Removed in
+  v5.69" section enumerating the whole deleted layer. The v5.68 paragraph
+  claiming SafetyMaxRiskPct "stays at 1.5% on purpose" and that halving it
+  would shrink the auditor's tolerance to 0.75% was FALSE on both counts --
+  nothing read that input and the auditor derives its own ceiling -- so it is
+  replaced by a Superseded note rather than quietly edited.
+
+  The journal's risk-allocation row is retagged "(v5.68 baseline)" ->
+  "(equity-based)", because there is no baseline to name any more: sizing
+  reads live equity at order time. The manual-adoption NOTE drops "DD halt"
+  from the list of machinery that applies to an adopted ticket.
+
+  Version stamps 5.68 -> 5.69, 19 literals, via _tools/_bump_version.py.
+
+VERIFICATION
+
+  _tools/build_check.ps1
+
+      Result: 0 errors, 0 warnings, 13723 ms, X64 Regular
+      binary: otto.ex5 (225350 bytes)
+
+      The deletion is COMPILE-GUARDED: any straggler reference to a removed
+      global, function or input becomes a hard error, so a clean 0E/0W gate is
+      the proof that the removal is complete rather than merely intended. The
+      0W half is the stronger signal here -- it caught seven would-be unused
+      locals (liveEquity, storedDaily, storedHwm, staleAnchor, midAnchor,
+      dailyDD, totalDD) that had to be deleted with their blocks.
+
+  _tools/scan_encoding.ps1
+
+      9/9 sources: bom=none, validUTF8=True, bareLF=0
+
+  _tools/verify_integrity.py (run post-commit; pre-commit it reports DIFFERS
+  against HEAD by design)
+
+      Encoding dimensions clean pre-commit: non-ASCII byte counts and literal
+      '?' counts identical to HEAD for all 9 sources, 0 bareLF, 0 bareCR.
+
+  Full probe suite, 31 files: 28 PASS, 3 FAIL.
+
+      new / retargeted
+          test_v569_ladder.py         65/65   (was v568, 56/56)
+          test_v569_propstrip.py      61/61   (new)
+          test_v52x_pyramid.py       137/137
+      inverted in place, now green
+          test_v528_hotfix.py         59/59   (was 53/64 at HEAD)
+          test_v533_adoptmanual.py   228/228
+          test_v545_throttle.py       28/28
+          test_v563_noveto.py        140/140
+      still green, subject matter touched
+          test_v557_frontrun.py       93/93   (Mid/Height still EXACTLY 2)
+          test_v564_pullback.py       51/51
+          test_v546_risk_isolation.py 28/28
+          test_v522/v523/v525          green (pure-Python models, tombstoned)
+
+  FAILING: test_v531_smart_trim.py (12/35), test_v532_hightable.py (116/126),
+  test_v543_session.py (27/29).
+
+      All three fail on a clean `git worktree` of HEAD (4370dbf, v5.68) with
+      the SAME counts and the SAME check names, so none is a regression from
+      v5.69. They are scripts that had already drifted from the sources they
+      claim to pin (they look for TrimHeavyLosers, AuditTrimHealth,
+      FloatingLossPct, a four-write session save and so on). Left untouched:
+      repairing them is an unrelated change.
+
+      NOTE the count changes in v532 (125/135 at HEAD -> 116/126). Eight of
+      its checks asserted the DD mirror and were inverted here; the total
+      dropped by nine because AuditDrawdown left the BODIES list, which
+      removes one "is defined" check plus that body's own latch-lifecycle
+      checks. The set of RED checks is otherwise identical to HEAD.
+
+  Set difference of the resolver's baseline (26/30 passing, exactly four red:
+  v528, v531, v532, v543) against today's result (28/31 passing, exactly three
+  red: v531, v532, v543): v528 is now fully green and nothing regressed.
+
+
+FILES TOUCHED
+
+  OttoDefines.mqh          RiskPercent 0.5 -> 1.0; group [4] rationale rewritten
+                           as the geometric cascade (tombstoning the flat-head
+                           and the false SafetyMaxRiskPct paragraphs); group [8]
+                           deleted, replaced by a purge note; groups [7]/[9]
+                           re-stamped 5.69 by the bump.
+  otto.mq5                 DD state globals + purge note; OttoGv* family and
+                           PersistSafetyState() deleted; init restore block and
+                           its four Prints deleted; MostRecentServerMidnight()
+                           and CheckDailyReset() deleted behind a tombstone;
+                           OnTick STEP 0 deleted and STEP 4 unguarded; LogStatus
+                           DD columns dropped; HighTablePushFacts baseline push
+                           dropped and its docstring rewritten.
+  CHighTableAuditor.mqh    four pushed members, three DD latches, two measures,
+                           SetSafetyBaseline(), AuditDrawdown() deleted; RunAudit
+                           4 checks -> 3; decoupling header and ingress docstrings
+                           corrected. AuditRiskExposure() untouched.
+  COttoJournal.mqh         257 "(v5.68 baseline)" -> "(equity-based)";
+                           353-354 drop "DD halt".
+  COttoOrderManager.mqh    cosmetic only: five comment sites claiming a
+                           "DD halt" path (355, 1752, 2392, 3147, 3162). No code.
+  COttoRiskManager.mqh     cosmetic only: CalculateLotSize() docstring said
+                           "0.0 to signal a prop-firm abort" (189-191). No code.
+  README.md                v5.69 Changed + Removed sections; v5.68 false claim
+                           superseded; base line bumped.
+  _probe/test_v568_halfrisk.py -> test_v569_ladder.py   (git mv + retarget)
+  _probe/test_v569_propstrip.py                         (new)
+  _probe/test_v52x_pyramid.py                           (ladder pins)
+  _probe/test_v528_hotfix.py, test_v532_hightable.py,
+  _probe/test_v533_adoptmanual.py, test_v545_throttle.py,
+  _probe/test_v563_noveto.py                            (inverted in place)
+  _probe/test_v522_safety.py, test_v523_dailyreset.py,
+  _probe/test_v525_persistence.py                       (tombstone headers)
+  _tools/_commit569.txt                                 (this file)
+
+BEHAVIOURAL DELTA AN OPERATOR SHOULD KNOW
+
+  * A 5% drawdown no longer stops the EA. It will keep taking new setups
+    through an unrecovered drawdown, because the breaker that used to halt it
+    is gone. This is the deliberate consequence of the request, not an
+    oversight -- but it belongs in the release note rather than in the diff.
+  * The initial position is twice the size it was in v5.68 (1.0% vs 0.5%),
+    and the fully-stacked basket risks 1.875% of equity instead of 1.375%.
+  * Nothing is remembered across a restart any more. A VPS bounce resets
+    every piece of EA state, which is now only in-memory trade/block state
+    that was already re-synced from the book in OnInit().
+  * An old .set file naming SafetyMaxRiskPct / SafetyDailyDDLimit /
+    SafetyTotalDDLimit still loads; MT5 simply reports the unknown input and
+    ignores it. No migration step is required.
+
+NOT DONE ON PURPOSE
+
+  * No push. v5.68 and v5.69 both await operator approval; `origin` stays at
+    v5.67 (f5410d2).
+  * The four R-multiple triggers were not retuned. The cascade is a change to
+    how much is risked at each milestone, not to when each milestone fires.
+  * The three drifted probes (v531, v532, v543) were not repaired; they were
+    only kept from regressing further.
+
+  them (see below).

@@ -247,7 +247,11 @@ LATCHES = re.findall(r"bool\s+m_alertSent_(\w+)\s*;\s*//", AUD_C)
 # The declarations carry trailing comments; also pick up a bare declaration.
 if len(LATCHES) < 6:
     LATCHES = re.findall(r"bool\s+m_alertSent_(\w+)\s*;", AUD_C)
-check("the auditor declares named latch members", len(LATCHES) >= 6,
+# v5.69: the halt / daily-DD / total-DD latches went with the drawdown layer,
+# leaving four (reject spike, stop-modify, state inconsistency, risk breach).
+# The floor moved 6 -> 4 with them; it stays a floor so a future incident
+# needing its own latch does not red this member-declaration check.
+check("the auditor declares named latch members", len(LATCHES) >= 4,
       "found %d: %s" % (len(LATCHES), sorted(LATCHES)))
 
 uninit = [l for l in LATCHES
@@ -350,8 +354,10 @@ check("the staging-tree expectation counts 9 OTTO sources",
 # ----------------------------------------------------------------------
 print("\n-- Part 2 live audit bodies --")
 
-BODIES = ["AuditTrimHealth", "AuditDrawdown", "AuditOrderHealth",
-          "AuditStateConsistency"]
+# v5.69: AuditDrawdown() is deleted with the prop-firm drawdown layer, so the
+# list drops to three. It is the probe contract for every downstream latch
+# lifecycle assertion, so removing the entry removes those assertions too.
+BODIES = ["AuditTrimHealth", "AuditOrderHealth", "AuditStateConsistency"]
 
 BODY_SRC = {}
 for name in BODIES:
@@ -359,7 +365,7 @@ for name in BODIES:
     check("%s is defined" % name, BODY_SRC[name] is not None)
 
 RUN = func_body(AUD_C, r"void\s+RunAudit\s*\(\s*void\s*\)") or ""
-check("RunAudit drives all four Part 2 bodies",
+check("RunAudit drives every surviving Part 2 body",
       all((name + "()") in RUN for name in BODIES))
 
 # Each body must be self-contained: it raises at most one LATCHED alert, and
@@ -454,12 +460,16 @@ check("FloatingLossPct returns the percent form",
       FL is not None and
       re.search(r"100\.0\s*\*\s*\(\s*balance\s*-\s*equity\s*\)\s*/\s*balance",
                 FL) is not None)
+# v5.69 INVERTED: DailyDDPct() and TotalDDPct() are deleted with the prop-firm
+# drawdown layer -- the anchors they divided by no longer exist anywhere in the
+# tree. The surviving contract is their ABSENCE, so a future reintroduction of a
+# drawdown measure in the auditor reds here.
 DAILYD = func_body(AUD_C, r"double\s+DailyDDPct\s*\(\s*void\s*\)")
-check("DailyDDPct measures against the pushed daily anchor",
-      DAILYD is not None and "m_dailyResetBalance" in DAILYD and "100.0" in DAILYD)
+check("DailyDDPct is deleted (no drawdown measure left in the auditor)",
+      DAILYD is None)
 TOTD = func_body(AUD_C, r"double\s+TotalDDPct\s*\(\s*void\s*\)")
-check("TotalDDPct measures against the pushed equity HWM",
-      TOTD is not None and "m_equityHwm" in TOTD and "100.0" in TOTD)
+check("TotalDDPct is deleted (no equity-HWM measure left in the auditor)",
+      TOTD is None)
 
 # Every threshold is the LIVE input, never a literal copy of its value. The
 # assertion has to name the COMPARISON, not merely the identifier: each of
@@ -469,12 +479,18 @@ check("TotalDDPct measures against the pushed equity HWM",
 # the EA's own limit would then no longer be the limit being watched.
 THRESHOLD_SITES = [
     ("floating-loss cap", r"if\s*\(\s*floatingLoss\s*>=\s*SafetyMaxFloatingLoss\s*\)"),
-    ("daily DD limit",    r"if\s*\(\s*dailyDD\s*>=\s*SafetyDailyDDLimit\s*\)"),
-    ("total DD limit",    r"if\s*\(\s*totalDD\s*>=\s*SafetyTotalDDLimit\s*\)"),
 ]
 for label, pat in THRESHOLD_SITES:
     check("the %s compares against the live input" % label,
           re.search(pat, AUD_C) is not None)
+
+# v5.69: the daily / trailing comparisons are deleted outright. Both the
+# comparison AND the input it read are gone, so there is no threshold left in
+# the auditor to drift from a live input -- asserted as absence.
+check("the daily DD comparison is deleted",
+      re.search(r"dailyDD\s*>=\s*SafetyDailyDDLimit", AUD_C) is None)
+check("the total DD comparison is deleted",
+      re.search(r"totalDD\s*>=\s*SafetyTotalDDLimit", AUD_C) is None)
 
 # ...and no numeric literal may stand in for a safety limit. A bare 0.90/3.0/
 # 5.0 comparison anywhere in the drawdown bodies is the same defect the pair
@@ -589,9 +605,10 @@ print("\n-- Part 2 pushed-fact ingress --")
 check("SetTrackedLegs carries the belief (legs, primary, active)",
       re.search(r"void\s+SetTrackedLegs\s*\(\s*int\s+\w+\s*,\s*ulong\s+\w+\s*,"
                 r"\s*bool\s+\w+", AUD_C) is not None)
-check("SetSafetyBaseline carries the anchors and the halt flag",
-      re.search(r"SetSafetyBaseline\s*\(\s*double\s+\w+\s*,\s*double\s+\w+\s*,"
-                r"\s*bool\s+\w+\s*\)", AUD_C) is not None)
+# v5.69 INVERTED: SetSafetyBaseline() is deleted -- otto.mq5 no longer holds a
+# daily reset balance, an equity high-water mark or a halt latch to push.
+check("SetSafetyBaseline is deleted with the drawdown layer",
+      "SetSafetyBaseline" not in AUD_C)
 check("the reject ingress is monotonic (delta-capable)",
       re.search(r"m_rejectCount\s*\+=", AUD_C) is not None)
 check("the stop-modify ingress is monotonic (delta-capable)",
@@ -622,8 +639,10 @@ check("the ingress is called from OnTimer",
 check("the ingress runs BEFORE the audit",
       0 < ONTIMER.find("HighTablePushFacts()") < ONTIMER.find("RunAudit()"))
 if PUSH is not None:
-    check("the ingress pushes the drawdown anchors",
-          "SetSafetyBaseline(" in PUSH)
+    # v5.69 INVERTED: the ingress no longer pushes drawdown anchors -- that
+    # whole fact class is gone, so the contract is that it is NOT pushed.
+    check("the ingress no longer pushes drawdown anchors",
+          "SetSafetyBaseline(" not in PUSH)
     check("the ingress pushes the tracked trade",
           "SetTrackedLegs(" in PUSH)
     check("the ingress takes the ticket from the order layer, not the book",

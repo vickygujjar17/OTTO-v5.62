@@ -1,6 +1,20 @@
 """
 Logic verification for the v5.25 prop-firm PERSISTENT MEMORY patch.
 
+TOMBSTONE (v5.69) -- THE LAYER THIS MODELS HAS BEEN DELETED IN FULL.
+`PersistSafetyState()`, the `OttoGv*` GlobalVariable helpers and the baselines
+they carried (g_dailyResetBalance, g_equityHighWaterMark, the halt/pause
+latches) are gone. The EA now writes no drawdown state anywhere, so the restart
+failure mode described below cannot occur -- there is no remembered budget left
+to be stale.
+
+It is retained DELIBERATELY, not by oversight. It is a pure-Python model and
+never reads the MQL5 sources, so it keeps passing and cannot mask a regression
+in the tree. The stale-store scenarios (absent key, deleted-key-reads-0.0,
+stale session anchor, HWM above live equity) stay recorded so a future
+reinstatement can reuse them. The live absence contract is
+`_probe/test_v569_propstrip.py`.
+
 Covers the failure mode a compile CANNOT validate: what the EA believes its
 drawdown baselines are immediately after a VPS restart.
 
@@ -11,9 +25,10 @@ LIVE account inside OnInit(). A restart mid-session therefore:
     its peak -- permanently defeating the trailing rule.
 v5.25 persists those baselines in MT5 GlobalVariables instead.
 
-Each function below mirrors the corresponding branch of otto.mq5 exactly, so
-this file is a behavioural spec for the MQL5 code rather than a re-implementation
-of it. If the .mq5 logic drifts, these checks fail.
+Each function below mirrors the corresponding branch of otto.mq5 as it stood at
+v5.25-v5.68. The "if the .mq5 logic drifts, these checks fail" contract is now
+VOID: the branches are gone, not drifted, and this file cannot see that. Treat
+it as a frozen record of the old behaviour.
 """
 
 LOGIN = 12345678

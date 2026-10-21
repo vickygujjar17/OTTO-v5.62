@@ -6,9 +6,14 @@ are pure RUNTIME properties of how often a call is reached, so a green build
 says nothing about either of them.
 
   1. AT MOST ONE EMAIL PER 30 MINUTES, ACROSS ALL INCIDENTS. The High Table
-     dispatcher fires from seven independent latched call sites (halt, daily
-     DD, total DD, reject burst, stop-modify failure, state inconsistency,
-     risk exposure). A lockout that trips several of them in one audit cycle
+     dispatcher fires from several independent latched call sites. Through
+     v5.68 that was seven (halt, daily DD, total DD, reject burst, stop-modify
+     failure, state inconsistency, risk exposure); v5.69 deleted the three
+     drawdown ones with the prop-firm layer, leaving FOUR. The count assertion
+     below is therefore a >= on four, not seven, and it is a floor rather than
+     an equality so adding a future incident cannot red a throttle probe that
+     has nothing to do with it. A lockout that trips several of them in one
+     audit cycle
      must NOT produce several emails. The guard is therefore a single SHARED
      stamp -- HT_EMAIL_COOLDOWN_SECONDS -- and it is read BEFORE the latch
      branch in DispatchAlertOnce, so the throttle belongs to the MAILBOX and
@@ -180,10 +185,13 @@ for fn, body in (("DispatchAlert", DISP), ("DispatchAlertOnce", DISP_ONCE)):
     check("%s owns a gated SendMail()" % fn,
           body is not None and "SendMail(" in body)
 
-# Seven independent latched incidents, one shared mailbox.
+# Independent latched incidents, one shared mailbox. v5.69: four survive
+# (reject burst, stop-modify failure, state inconsistency, risk exposure); the
+# halt / daily-DD / total-DD trio went with the drawdown layer. The floor is 4
+# so the throttle contract is still pinned without re-pinning the incident list.
 latches = re.findall(r"DispatchAlertOnce\s*\(\s*(m_alertSent_\w+)", AUD_C)
 check("every latched incident routes through DispatchAlertOnce",
-      len(latches) >= 7, "found %d" % len(latches))
+      len(latches) >= 4, "found %d" % len(latches))
 check("no incident bypasses the dispatcher with a raw SendMail()",
       len(re.findall(r"SendMail\s*\(\s*subject\s*,\s*message\s*\)", AUD_C)) == 2,
       "found %d" % len(re.findall(r"SendMail\s*\(\s*subject\s*,\s*message\s*\)", AUD_C)))

@@ -1,6 +1,20 @@
 """
 Logic verification for the v5.22 / v5.24 prop-firm safety rules.
 
+TOMBSTONE (v5.69) -- THIS MODEL NO LONGER DESCRIBES THE SHIPPED EA.
+The prop-firm drawdown layer was deleted in full: the daily-DD pause, the
+total/trailing DD halt, the 00:00 reset clock, the equity high-water mark and
+the GlobalVariable persistence store. Sizing is pure equity-based now, so
+nothing in this file corresponds to code that exists.
+
+It is retained DELIBERATELY, not by oversight. It is a pure-Python model: it
+never reads the MQL5 sources, so it keeps passing and cannot mask a regression
+in the tree. What it still buys is the arithmetic -- the daily/trailing DD
+formulas and their boundary behaviour are recorded here, so if a drawdown
+breaker is ever reinstated these cases are ready to be re-pointed at the new
+source instead of re-derived from scratch. The live absence contract is pinned
+by `_probe/test_v569_propstrip.py`.
+
 MODEL HISTORY -- SUPERSEDED FOR THE 1% RULE (v5.28). The functions below
 pin the v5.22/v5.24 arithmetic so their behaviour stays reproducible and the
 basis change stays documented, but they NO LONGER describe what the EA does:

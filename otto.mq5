@@ -1,11 +1,11 @@
 //+------------------------------------------------------------------+
 //|                                                       OttoEA.mq5 |
 //|                    OTTO — Goat Funded Trader (GFT) Master Build    |
-//|                    Pine Script Master Build Port (v5.68)            |
+//|                    Pine Script Master Build Port (v5.69)            |
 //|                                    Institutional / Real-Money    |
 //+------------------------------------------------------------------+
 #property copyright "OTTO EA - Goat Funded Trader (GFT) Master Build"
-#property version   "5.68"
+#property version   "5.69"
 #property description "OTTO EA â€” Goat Funded Trader (GFT) Master Build"
 #property description "Structural vetoes only: Separation | Sizing | Broken | Flipped"
 #property description "Modules: Risk | Block Manager | Order Mgmt | Trail"
@@ -78,103 +78,22 @@ int      g_marketDay        = 0;
 datetime g_lastDailyBarTime = 0;
 datetime g_lastBarTime      = 0;
 
-// --- Prop Firm Safety State ---
-double   g_initialBalance      = 0;
-double   g_dailyResetBalance   = 0;  // Re-anchored at 00:00 MT5 server time (The5ers)
-// FIX (v5.24): single equity high-water mark. Trailing total DD previously
-// trailed the peak CLOSED balance in g_highWaterMarkBalance; it now trails
-// peak EQUITY, so the 5% trailing DD shares this one basis.
-double   g_equityHighWaterMark = 0;  // Tracks highest all-time EQUITY for Trailing Drawdown
-datetime g_lastMidnightCheck   = 0;
-bool     g_dailyDD_Paused      = false;
-bool     g_totalDD_Halted      = false;
-datetime g_dailyDD_ResumeTime  = 0;
-
-//+------------------------------------------------------------------+
-//| Prop-firm persistent state key helpers (v5.25)                    |
-//|                                                                   |
-//| The EA is deployed on a VPS and WILL be restarted mid-session.     |
-//| Re-seeding the drawdown baselines from live account values on every |
-//| init silently resets the daily 3% budget and re-bases the trailing |
-//| limits downward, so the baselines are persisted in MT5 Global      |
-//| Variables instead.                                                 |
-//|                                                                   |
-//| Keys are namespaced OTTO_* and suffixed with the account login, so  |
-//| the ~28 EA instances and any other account on the same terminal    |
-//| cannot collide. v5.63: the TS_Bias_* namespace that                 |
-//| COttoCorrelationFilter used to own is no longer written at all --   |
-//| the cross-chart arbiter that published it is deleted. v5.67 also    |
-//| drops the residual local tie-breaker, so this tree arbitrates       |
-//| nothing: every chart trades only its own zones.                     |
-//|                                                                   |
-//| NOTE: Globals live in the TERMINAL's shared namespace, not per     |
-//| chart. Two terminals on one machine have separate stores; two charts|
-//| of the same account in ONE terminal intentionally share these keys. |
-//+------------------------------------------------------------------+
-string OttoGvName(const string key)
-  {
-   return "OTTO_" + key + "_" + IntegerToString(AccountInfoInteger(ACCOUNT_LOGIN));
-  }
-
-//| Read a persisted double, falling back when the key is absent.     |
-double OttoGvLoadDouble(const string key, const double fallback)
-  {
-   string name = OttoGvName(key);
-   if(!GlobalVariableCheck(name))
-      return fallback;
-   double v = GlobalVariableGet(name);
-   // A GV deleted by the terminal or never set reads back as 0.0; treat
-   // that as absent rather than as a legitimate baseline.
-   if(v == 0.0)
-      return fallback;
-   return v;
-  }
-
-//| Read a persisted boolean flag (stored as 0.0 / 1.0).              |
-bool OttoGvLoadFlag(const string key, const bool fallback)
-  {
-   string name = OttoGvName(key);
-   if(!GlobalVariableCheck(name))
-      return fallback;
-   return (GlobalVariableGet(name) >= 0.5);
-  }
-
-//| Write/persist a double. Returns false if the terminal refused it. |
-//| NOTE: GlobalVariableSet returns datetime (last-access time), not bool. |
-bool OttoGvStore(const string key, const double value)
-  {
-   if(!GlobalVariableSet(OttoGvName(key), value))
-     {
-      Print("[Safety] WARNING: GlobalVariableSet failed for ", OttoGvName(key));
-      return false;
-     }
-   return true;
-  }
-
-//| Persist one boolean flag as 0.0 / 1.0.                            |
-bool OttoGvStoreFlag(const string key, const bool value)
-  {
-   if(!GlobalVariableSet(OttoGvName(key), value ? 1.0 : 0.0))
-     {
-      Print("[Safety] WARNING: GlobalVariableSet failed for ", OttoGvName(key));
-      return false;
-     }
-   return true;
-  }
-
-//+------------------------------------------------------------------+
-//| Persist every prop-firm safety baseline (v5.25).                   |
-//| Called whenever a baseline moves, so a restart always resumes from |
-//| the true rather than the current account state.                    |
-//+------------------------------------------------------------------+
-void PersistSafetyState(void)
-  {
-   OttoGvStore("DailyReset", g_dailyResetBalance);
-   OttoGvStore("HighWater",  g_equityHighWaterMark);
-   OttoGvStore("LastMid",    (double)g_lastMidnightCheck);
-   OttoGvStoreFlag("Paused", g_dailyDD_Paused);
-   OttoGvStoreFlag("Halted", g_totalDD_Halted);
-  }
+// v5.69 — PROP-FIRM DRAWDOWN LAYER PURGED.
+// Removed from this file, with no replacement:
+//   g_initialBalance / g_dailyResetBalance / g_initialBalance re-seeding
+//   g_equityHighWaterMark  (trailing-DD basis)
+//   g_lastMidnightCheck    (00:00 server-time reset clock)
+//   g_dailyDD_Paused / g_totalDD_Halted / g_dailyDD_ResumeTime  (latches)
+//   the OttoGv* GlobalVariable helpers and PersistSafetyState()
+//   MostRecentServerMidnight() and CheckDailyReset()
+//   the whole STEP 0 safety block in OnTick (equity HWM ratchet, 3% daily
+//   pause, 5% trailing halt, CancelAllPendingOrders + CloseEntireBasket on
+//   breach) and the audit-side mirror in CHighTableAuditor.
+//
+// Sizing is now PURE EQUITY-BASED: RiskPercent% of live equity, with no
+// drawdown circuit breaker, no persistence, and no cross-restart state. The
+// EA holds nothing in the terminal's GlobalVariable store, so a VPS restart
+// cannot resurrect a stale pause/halt or a stale high-water mark.
 
 //+------------------------------------------------------------------+
 //| int OnInit(void)
@@ -184,7 +103,7 @@ int OnInit(void)
    g_symbol = _Symbol;
 
    Print("==============================================================");
-   Print("  OTTO EA v5.68 — 28-Pair Institutional Master Build — INITIALIZING");
+   Print("  OTTO EA v5.69 — 28-Pair Institutional Master Build — INITIALIZING");
    Print("  Symbol: ", g_symbol, " | Magic: ", MagicNumber);
    Print("==============================================================");
 
@@ -287,9 +206,10 @@ int OnInit(void)
 
    // --- High Table watchdog -----------------------------------------
    // A separate timer is registered for the audit so the watchdog is not
-   // hostage to OnTick: if the trade loop halts (total-DD halt), pauses
-   // (daily-DD pause) or simply receives no ticks, High Table still runs
-   // and can still report the condition that stopped everything else.
+   // hostage to OnTick: if the trade loop stalls or simply receives no
+   // ticks, High Table still runs and can still report a condition that
+   // would otherwise go unseen. (v5.69: the trade loop no longer has a
+   // halt or pause state to report -- that layer is deleted.)
    if(InpEnableHighTable)
      {
       g_highTable.Initialize(g_symbol, MagicNumber);
@@ -313,71 +233,11 @@ int OnInit(void)
             ") -> the -0.5R half-risk rung is UNREACHABLE and will never be",
             " applied or journalled. Set InpCutRiskRR below InpBreakEvenRR to arm it.");
 
-   // --- Prop firm safety state: PERSISTENT MEMORY (v5.25) ---
-   // FIX (v5.25): these baselines are loaded from MT5 GlobalVariables and only
-   // seeded when absent. Previously every init re-seeded them from the LIVE
-   // account, so a VPS restart mid-session reset the 3% daily budget and
-   // re-based the trailing limits downward -- "drawdown amnesia".
-   //
-   // The live trailing basis is g_equityHighWaterMark (single equity HWM, v5.24,
-   // shared by the 5% trailing DD). The directive that
-   // requested this patch referred to a global named `g_highWaterMark`, which
-   // does not exist in this build; persisting a separate new global under that
-   // name would compile while leaving the REAL basis unpersisted, so the correct
-   // target is used deliberately here.
-   g_initialBalance = AccountInfoDouble(ACCOUNT_BALANCE);
-
-   double liveEquity = AccountInfoDouble(ACCOUNT_EQUITY);
-
-   // --- Daily reset anchor (daily DD basis) ---
-   // Re-seeded when the stored anchor names a DIFFERENT session than the
-   // current one: a prop firm can RESET a challenge account on the same
-   // login, and carrying the old anchor across that reset would apply a
-   // stale (possibly already-breached) budget to a freshly-funded account.
-   datetime midAnchor  = MostRecentServerMidnight(TimeCurrent());
-   g_lastMidnightCheck = (datetime)OttoGvLoadDouble("LastMid", (double)midAnchor);
-   bool staleAnchor    = (midAnchor != 0 && g_lastMidnightCheck != midAnchor);
-   double storedDaily  = OttoGvLoadDouble("DailyReset", 0);
-   // The5ers computes its daily reset from EQUITY at 00:00 server time, so
-   // the cold-start seed matches the live measure (see CheckDailyReset).
-   g_dailyResetBalance = (staleAnchor || storedDaily <= 0)
-                         ? AccountInfoDouble(ACCOUNT_EQUITY)
-                         : storedDaily;
-   if(g_dailyResetBalance <= 0)
-      g_dailyResetBalance = AccountInfoDouble(ACCOUNT_EQUITY);
-
-   // --- Trailing high-water mark (5% trailing DD basis) ---
-   // A stored HWM BELOW current equity is simply stale history (the account has
-   // since made new highs) and is superseded by live equity. A stored HWM far
-   // ABOVE current equity is honoured as a genuine prior peak, because that is
-   // precisely the state this fix exists to remember -- a restart while down.
-   double storedHwm = OttoGvLoadDouble("HighWater", liveEquity);
-   g_equityHighWaterMark = (storedHwm > liveEquity) ? storedHwm : liveEquity;
-
-   // --- Halt / pause latches ---
-   // g_totalDD_Halted is PERMANENT: a breached account must stay halted across a
-   // restart, otherwise a VPS bounce would silently resume trading past a
-   // hard limit. g_dailyDD_Paused clears at the session rollover (see
-   // CheckDailyReset) and is recomputed here from the persisted anchor.
-   g_totalDD_Halted = OttoGvLoadFlag("Halted", false);
-   g_dailyDD_Paused = OttoGvLoadFlag("Paused", false) && !staleAnchor;
-   g_dailyDD_ResumeTime = (g_dailyDD_Paused && g_lastMidnightCheck > 0)
-                          ? g_lastMidnightCheck + 86400 : 0;
-
-   // Persist the reconciled baselines so the store matches in-memory truth.
-   PersistSafetyState();
-
-   Print("[Safety] Persistence: ", staleAnchor ? "STALE ANCHOR RE-SEEDED" : "restored",
-         " | DailyReset: ", DoubleToString(g_dailyResetBalance, 2),
-         " (stored ", DoubleToString(storedDaily, 2), ")",
-         " | Equity HWM: ", DoubleToString(g_equityHighWaterMark, 2),
-         " (stored ", DoubleToString(storedHwm, 2), ")");
-   Print("[Safety] Restored latches: Paused=", g_dailyDD_Paused ? "true" : "false",
-         " Halted=", g_totalDD_Halted ? "true" : "false",
-         " | LastMidnight: ", TimeToString(g_lastMidnightCheck, TIME_DATE|TIME_MINUTES));
-   Print("[Safety] Init Balance: ", DoubleToString(g_initialBalance, 2),
-         " | DailyDD: ", SafetyDailyDDLimit, "% | TotalDD(trailing): ", SafetyTotalDDLimit, "%");
-   Print("[Safety] Daily reset anchor: ", TimeToString(g_lastMidnightCheck, TIME_DATE|TIME_MINUTES));
+   // v5.69: the prop-firm safety state block that stood here (persistent daily
+   // reset anchor, trailing equity high-water mark, halt/pause latches, all
+   // restored from MT5 GlobalVariables) is DELETED along with the inputs and
+   // the OnTick checks that consumed it. Nothing below depends on it and no
+   // drawdown baseline is seeded at init any more.
 
    // --- Market-day counter init (mirrors ta.change(time("D"))) ---
    g_lastDailyBarTime = iTime(_Symbol, PERIOD_D1, 0);
@@ -425,8 +285,7 @@ int OnInit(void)
    Print("  Risk: ", DoubleToString(RiskPercent,2), "% dynamic equity"
          " (=$", DoubleToString(AccountInfoDouble(ACCOUNT_EQUITY) * RiskPercent / 100.0, 2), ")",
          " | Ladder: T1 ", DoubleToString(RiskPercent,2), "% / T2 ", DoubleToString(InpRiskT2Pct,2),
-         "% / T3 ", DoubleToString(InpRiskT3Pct,3), "% / T4 ", DoubleToString(InpRiskT4Pct,3), "%",
-         " | DailyDD: ", SafetyDailyDDLimit, "% | TotalDD: ", SafetyTotalDDLimit, "%");
+         "% / T3 ", DoubleToString(InpRiskT3Pct,3), "% / T4 ", DoubleToString(InpRiskT4Pct,3), "%");
    Print("==============================================================");
 
    return INIT_SUCCEEDED;
@@ -490,49 +349,15 @@ void OnDeinit(const int reason)
   }
 
 //+------------------------------------------------------------------+
-//| Daily reset clock: 00:00 MT5 server time (The5ers).               |
-//| No New York / UTC conversion -- server time is the basis.         |
+//| Daily reset clock — REMOVED (v5.69)                              |
+//|                                                                  |
+//| MostRecentServerMidnight() and CheckDailyReset() are deleted with |
+//| the prop-firm drawdown layer they served. Nothing in this build   |
+//| re-anchors on a 00:00 server-time boundary: sizing reads live     |
+//| equity at order time, so there is no daily budget to reset.       |
+//| The market-day counter below is independent -- it keys off        |
+//| iTime(_Symbol, PERIOD_D1, 0) and never touched these helpers.     |
 //+------------------------------------------------------------------+
-
-//| Most recent 00:00 MT5 server-time boundary (server instant).     |
-datetime MostRecentServerMidnight(const datetime serverNow)
-  {
-   MqlDateTime d;
-   TimeToStruct(serverNow, d);
-   d.hour = 0;
-   d.min  = 0;
-   d.sec  = 0;
-   return StructToTime(d);
-  }
-
-
-//+------------------------------------------------------------------+
-//| Checks the daily reset at 00:00 MT5 server time (The5ers).        |
-//+------------------------------------------------------------------+
-void CheckDailyReset(void)
-  {
-   datetime serverNow = TimeCurrent();
-   MqlDateTime dt;
-   TimeToStruct(serverNow, dt);
-   dt.hour = 0;
-   dt.min  = 0;
-   dt.sec  = 0;
-   datetime midnightServer = StructToTime(dt);
-
-   if(midnightServer == 0 || midnightServer == g_lastMidnightCheck)
-      return;
-
-   g_dailyResetBalance  = AccountInfoDouble(ACCOUNT_EQUITY); // The5ers uses Equity at midnight
-   g_lastMidnightCheck  = midnightServer;
-   g_dailyDD_ResumeTime = 0;
-   if(g_dailyDD_Paused)
-     {
-      g_dailyDD_Paused = false;
-      if(EnableLogging)
-         Print("[Safety] New day (00:00 MT5 Server Time) — daily DD pause LIFTED");
-     }
-   PersistSafetyState();
-  }
 
 //+------------------------------------------------------------------+
 //| New-bar detection â€” gates the block formation + veto funnel      |
@@ -569,65 +394,18 @@ void UpdateMarketDay(void)
 void OnTick(void)
   {
    if(!g_initialized) return;
-   if(g_totalDD_Halted) return;
 
    g_tickCount++;
-   CheckDailyReset();
 
    // ================================================================
-   // STEP 0: PROP FIRM SAFETY CHECKS (highest priority)
+   // STEP 0: PROP FIRM SAFETY CHECKS — REMOVED (v5.69)
+   // The 3% daily-DD pause, the 5% trailing-DD halt, the equity
+   // high-water ratchet, the restart persistence layer and the
+   // breach-path CancelAllPendingOrders/CloseEntireBasket are all
+   // deleted. OnTick no longer consults any drawdown state and has no
+   // early return between init and block processing: sizing is pure
+   // equity-based (RiskPercent% of live equity at order time).
    // ================================================================
-   if(!g_dailyDD_Paused && !g_totalDD_Halted)
-     {
-      double equity         = AccountInfoDouble(ACCOUNT_EQUITY);
-
-      // FIX (v5.24): single equity high-water mark. The trailing total-DD limit
-      // previously trailed the peak CLOSED balance; it now trails peak EQUITY,
-      // matching GFT's all-time-equity trailing drawdown. Only ratchets UP,
-      // never down.
-      // FIX (v5.25): each new peak is persisted immediately, so a restart while
-      // the account is down from its high resumes from the TRUE peak instead of
-      // re-basing the trailing floor to the depressed live equity.
-      if(equity > g_equityHighWaterMark)
-        {
-         g_equityHighWaterMark = equity;
-         OttoGvStore("HighWater", g_equityHighWaterMark);
-        }
-
-      double dailyDD = (g_dailyResetBalance > 0) ? 100.0 * (g_dailyResetBalance - equity) / g_dailyResetBalance : 0;
-      double totalDD = (g_equityHighWaterMark > 0) ? 100.0 * (g_equityHighWaterMark - equity) / g_equityHighWaterMark : 0;
-
-      // 3% Max Daily Drawdown (soft breach: pause new orders only)
-      if(dailyDD >= SafetyDailyDDLimit)
-        {
-         g_dailyDD_Paused = true;
-         g_dailyDD_ResumeTime = g_lastMidnightCheck + 86400;
-         OttoGvStoreFlag("Paused", true);   // FIX (v5.25): survives a restart
-         g_orderManager.CancelAllPendingOrders();
-         if(EnableLogging)
-            Print("[Safety] DAILY DRAWDOWN: ", DoubleToString(dailyDD, 2),
-                  "% >= ", SafetyDailyDDLimit, "% — paused new orders");
-        }
-
-      // 5% Trailing Total Drawdown (hard breach: close all + halt)
-      if(totalDD >= SafetyTotalDDLimit)
-        {
-         g_totalDD_Halted = true;
-         OttoGvStoreFlag("Halted", true);   // FIX (v5.25): survives a restart
-         g_orderManager.CancelAllPendingOrders();
-         // Close the WHOLE basket, not just the primary ticket: hedging-mode
-         // pyramid tranches are separate positions and must not survive the halt.
-         if(g_orderManager.HasActiveTrade() || g_orderManager.CountOpenPositions() > 0)
-            g_orderManager.CloseEntireBasket("Total Trailing DD Halt");
-         Print("==============================================================");
-         Print("  FATAL: TOTAL TRAILING DRAWDOWN LIMIT REACHED — EA PERMANENTLY HALTED");
-         Print("  Equity HWM: ", DoubleToString(g_equityHighWaterMark, 2),
-               " | Equity: ", DoubleToString(equity, 2));
-         Print("  DD: ", DoubleToString(totalDD, 2), "% >= ", SafetyTotalDDLimit, "%");
-         Print("==============================================================");
-         return;
-        }
-     }
 
    // ================================================================
    // STEP 1: NEWS FILTER — REMOVED (v5.63)
@@ -676,18 +454,18 @@ void OnTick(void)
 
    // ================================================================
    // STEP 4: ORDER PLACEMENT - Pine-gated limit orders for armed blocks
-   // Gated by the daily-DD pause and the block's own structural veto
-   // state only. v5.63: the news-blackout gate is gone with the shield.
+   // Gated by the block's own structural veto state only. v5.63: the
+   // news-blackout gate is gone with the shield. v5.69: the daily-DD
+   // pause gate is gone with the prop-firm drawdown layer, so placement
+   // is unconditional here -- nothing above this line can park it.
    // ================================================================
-   if(!g_dailyDD_Paused)
-     {
-      // Every armed block routes through the single hybrid engine:
-      // PlaceOrdersForArmedBlocks() ARMS the order -- a resting broker limit
-      // when the price permits one, else an in-memory virtual order -- and the
-      // order manager's CheckVirtualTriggers() FIRES the MARKET leg once the
-      // continuation level trades through. v5.52 has no per-phase split.
-      g_orderManager.PlaceOrdersForArmedBlocks();
-     }
+
+   // Every armed block routes through the single hybrid engine:
+   // PlaceOrdersForArmedBlocks() ARMS the order -- a resting broker limit
+   // when the price permits one, else an in-memory virtual order -- and the
+   // order manager's CheckVirtualTriggers() FIRES the MARKET leg once the
+   // continuation level trades through. v5.52 has no per-phase split.
+   g_orderManager.PlaceOrdersForArmedBlocks();
 
    // ================================================================
    // STEP 5: MANAGE ACTIVE TRADES â€” dynamic trail (every tick)
@@ -730,9 +508,7 @@ void LogStatus(void)
                      " | Blocks: ", g_blockManager.GetBlockCount(),
                      " | ActiveTrade: ", g_orderManager.HasActiveTrade() ? "YES" : "NO",
                      " | Pending: ", g_orderManager.CountMyPending(),
-                     " | ATR: ", DoubleToString(g_blockManager.GetATR(), _Digits),
-                     " | DailyDD: ", g_dailyDD_Paused ? "PAUSED" : "OK",
-                     " | TotalDD: ", g_totalDD_Halted ? "HALTED" : "OK");
+                     " | ATR: ", DoubleToString(g_blockManager.GetATR(), _Digits));
    Print(statusLine);
    if(g_fileHandle != INVALID_HANDLE)
      {
@@ -831,19 +607,20 @@ void OnTimer(void)
 //| High Table fact ingress (v5.32)                                   |
 //|                                                                   |
 //| Called from OnTimer immediately before RunAudit(). It hands the    |
-//| auditor the two facts it cannot read for itself:                  |
+//| auditor the one fact it cannot read for itself:                   |
 //|                                                                   |
-//|   1. The live drawdown anchors. These are this file's private      |
-//|      GlobalVariable-backed state; re-deriving them inside the      |
-//|      auditor would mean duplicating the OTTO_<key>_<login> key     |
-//|      format, i.e. a second source of truth for the trailing floor. |
-//|                                                                   |
-//|   2. The trade the order layer believes it is driving, so the      |
+//|   1. The trade the order layer believes it is driving, so the      |
 //|      auditor can test that belief against the real book.           |
+//|
+//| v5.69: the second fact -- the live drawdown anchors (daily reset  |
+//| balance, equity high-water mark, permanent halt latch) -- is gone. |
+//| Those anchors no longer exist anywhere in the tree, so there is   |
+//| nothing to push and CHighTableAuditor::SetSafetyBaseline() is      |
+//| deleted with the AuditDrawdown() body that consumed it.            |
 //|                                                                   |
-//| Both push points are read-only calls on the trade modules: the     |
-//| auditor still holds no reference to them, which is what keeps the  |
-//| decoupling contract intact (see CHighTableAuditor.mqh header).     |
+//| The push points that remain are read-only calls on the trade       |
+//| modules: the auditor still holds no reference to them, which is    |
+//| what keeps the decoupling contract intact (see the module header). |
 //|                                                                   |
 //| The counters are pushed as DELTAS because GetOrdersRejected() and  |
 //| GetStopModifyFailures() are monotonic lifetime totals; the push    |
@@ -851,10 +628,6 @@ void OnTimer(void)
 //+------------------------------------------------------------------+
 void HighTablePushFacts(void)
   {
-   // --- Drawdown anchors + permanent halt ---
-   g_highTable.SetSafetyBaseline(g_dailyResetBalance, g_equityHighWaterMark,
-                                 g_totalDD_Halted);
-
    // --- Order-reject delta since the previous push ---
    long rejects = g_orderManager.GetOrdersRejected();
    if(rejects > g_htPushedRejects)

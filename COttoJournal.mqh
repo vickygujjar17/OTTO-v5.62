@@ -4,7 +4,7 @@
 //|            OTTO EA — dynamic file editing, cancellation, email       |
 //+------------------------------------------------------------------+
 #property copyright "OTTO EA - Goat Funded Trader (GFT) Master Build"
-#property version   "5.68"
+#property version   "5.69"
 
 #ifndef __OTTO_JOURNAL__
 #define __OTTO_JOURNAL__
@@ -254,7 +254,7 @@ public:
       // the 1R distance the SL is set from, and the money actually committed.
       W("  Block Height      : " + FmtPrice(blk.blockHeight) + " (" + FmtPips(blk.blockHeight) + " pips)  = Top - Bottom");
       W("  SL Distance (1R)  : " + FmtPrice(blk.rrUnit) + " (" + FmtPips(blk.rrUnit) + " pips)  = Block Height + 0.5*ATR");
-      W("  Risk Allocation   : " + DoubleToString(RiskPercent,2) + "% of equity = $" + DoubleToString(RiskMoneyAt(RiskPercent),2) + " (v5.68 baseline)");
+      W("  Risk Allocation   : " + DoubleToString(RiskPercent,2) + "% of equity = $" + DoubleToString(RiskMoneyAt(RiskPercent),2) + " (equity-based)");
       W("  Projected Target  : " + FmtPrice(ProjectedTarget(blk, dir)) + " (InpMaxRR projection, far edge +/- RR x 1R; context only - exits are trail-based)");
       if(blk.wick1Time > 0 && blk.wick2Time > 0)
         {
@@ -350,7 +350,7 @@ public:
       W("  Initial Risk (1R) : " + FmtPrice(slDistance) +
         "  (" + DoubleToString(slPips, 1) + " pips)");
       W("  Volume            : " + DoubleToString(lot, 2) + " lots");
-      W("  NOTE              : trail, ladder, trim, DD halt and the basket");
+      W("  NOTE              : trail, ladder, trim and the basket");
       W("                      close all now apply to this ticket.");
       W("================================================================");
       CloseHandle();

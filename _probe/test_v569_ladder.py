@@ -1,39 +1,46 @@
 """
-v5.68 static verification probe - HALVED RISK BASELINE + FULL BLOCK GEOMETRY.
+v5.69 static verification probe - GEOMETRIC RISK CASCADE + FULL BLOCK GEOMETRY.
 
-Two independent changes landed together in v5.68:
+Two independent changes are pinned here.
 
-  1. THE INITIAL RISK ALLOCATION WAS HALVED. Every rung of the flat-head
-     pyramid moved with it, so the ladder keeps its SHAPE (T1 == T2, then
-     T3 halves, T4 quarters) while every absolute number halves:
-        T1 RiskPercent   1.0   -> 0.5     (at market)
-        T2 InpRiskT2Pct  1.0   -> 0.5     (at +1.0R)
-        T3 InpRiskT3Pct  0.5   -> 0.25    (at +2.0R)
-        T4 InpRiskT4Pct  0.25  -> 0.125   (at +3.0R)
-        summed                 2.75% -> 1.375%
-     Nothing about the GEOMETRY moved: every scale-in trigger, breakeven
-     floor, profit lock and ATR trail rung is an R-multiple of the primary's
-     own 1R, so halving the % risk shrinks LOTS and MONEY, never the price
-     levels at which the ladder advances. That separation is pinned in
-     section 3, because a future "halve the risk" edit that also touched a
-     trigger would silently re-time the entire trade.
+  1. THE LADDER IS NOW A GEOMETRIC CASCADE. v5.68 had halved every rung, which
+     turned the v5.61 flat-head shape (T1 == T2) into 0.5 / 0.5 / 0.25 / 0.125.
+     v5.69 restores ONLY T1 and leaves the three scale-ins untouched, so each
+     rung now risks exactly half the rung above it:
+        T1 RiskPercent   0.5   -> 1.0     (at market)
+        T2 InpRiskT2Pct  0.5   -> 0.5     (at +1.0R)  unchanged
+        T3 InpRiskT3Pct  0.25  -> 0.25    (at +2.0R)  unchanged
+        T4 InpRiskT4Pct  0.125 -> 0.125   (at +3.0R)  unchanged
+        summed                 1.375% -> 1.875%
+     The flat-head shape is GONE ON PURPOSE: T1 no longer equals T2, so the
+     old "T1 == T2" assertion is deleted rather than softened. A future edit
+     that re-flattens the head must now red a probe instead of sliding past.
+     Nothing about the GEOMETRY moved: every scale-in trigger, breakeven floor,
+     profit lock and ATR trail rung is an R-multiple of the primary's own 1R,
+     so changing the % risk moves LOTS and MONEY, never the price levels at
+     which the ladder advances. That separation is pinned in section 3,
+     because a future "tune the risk" edit that also touched a trigger would
+     silently re-time the entire trade.
 
-  2. THE JOURNAL NOW PRINTS THE FULL BLOCK GEOMETRY. Both LogSetupArmed()
-     and LogEntry() carry block top / bottom / midpoint / height (v5.57
-     already had the combined row), and v5.68 ADDS the standalone block
-     height in price AND pips, the 1R stop distance in price AND pips, and
-     the risk allocation actually being committed. LogEntry() additionally
-     prints the REALIZED fill-to-SL distance beside the planned 1R, so a
-     slipped fill is visible in the journal instead of hiding behind the
-     planned number.
+  2. THE JOURNAL PRINTS THE FULL BLOCK GEOMETRY. Both LogSetupArmed() and
+     LogEntry() carry block top / bottom / midpoint / height, and v5.68 added
+     the standalone block height in price AND pips, the 1R stop distance in
+     price AND pips, and the risk allocation actually being committed.
+     LogEntry() additionally prints the REALIZED fill-to-SL distance beside the
+     planned 1R, so a slipped fill is visible in the journal instead of
+     hiding behind the planned number. v5.69 retags the allocation row from
+     "(v5.68 baseline)" to "(equity-based)" because there is no baseline to
+     name any more -- sizing reads live equity at order time.
 
 WHY A PROBE AND NOT JUST THE COMPILER. None of this is visible to MQL5C.
-Halving a `const double` compiles identically whether or not the auditor's
+Doubling a `const double` compiles identically whether or not the auditor's
 tolerance, the pyramid probe's pinned sum, or the documented per-leg rationale
 were updated with it, and a journal row prints the same whether or not the
 value behind it is the number the sizer will commit. So this probe pins the
 NUMBERS, the ARITHMETIC RELATIONSHIP between them, and the ROW STRUCTURE that
-the operator reads.
+the operator reads. It also pins the NEGATIVE direction: section 2 asserts that
+the dead SafetyMaxRiskPct input and the whole prop-firm group are GONE, not
+merely unused.
 
 WHAT IT CANNOT PROVE. That a real fill slips, or that the terminal renders
 the rows exactly as written, are runtime properties. This is static analysis
@@ -58,7 +65,13 @@ ALL_FILES = ["otto.mq5", "COttoOrderManager.mqh", "COttoTradeManager.mqh",
              "CHighTableAuditor.mqh", "COttoMarketStructure.mqh",
              "OttoDefines.mqh"]
 
-RELEASE = "5.68"
+# Auto-detect the release from the source stamp instead of hard-coding it, so a
+# version bump does not require touching this probe (v5.68 hard-coded it and had
+# to be edited by the v5.69 bump; every other probe already auto-detects).
+_STAMP = re.search(r'#property\s+version\s+"([0-9.]+)"',
+                   io.open(os.path.join(ROOT, "OttoDefines.mqh"),
+                           encoding="utf-8", errors="replace", newline="").read())
+RELEASE = _STAMP.group(1) if _STAMP else "?"
 
 
 def read(p):
@@ -70,9 +83,9 @@ def read(p):
 def strip_comments(code):
     """Drop // comments, respecting string literals.
 
-    Load-bearing here: the v5.68 notes quote the RETIRED 1.0% / 2.75% figures
-    in place ("HALVED from 1.0%", "v5.29 text ... claimed the SUM"), so a raw
-    substring test would trip over the probe's own subject matter.
+    Load-bearing here: the v5.69 notes quote the RETIRED 0.5% / 1.375% figures
+    in place ("restored to 1.0%", "was 1.375 in v5.68"), so a raw substring
+    test would trip over the probe's own subject matter.
     """
     out = []
     for line in code.split("\n"):
@@ -114,35 +127,40 @@ TRADE_C = strip_comments(read(TRADE))
 
 
 # ----------------------------------------------------------------------
-# 1. Every rung was halved, and the halving is CONSISTENT.
+# 1. T1 was restored, the three scale-ins held, and the cascade is CONSISTENT.
 # ----------------------------------------------------------------------
-print("\n-- 1. The risk ladder halved as one piece --")
+print("\n-- 1. The risk ladder is a geometric cascade --")
 
 T1 = num_input(DEFS_C, "RiskPercent")
 T2 = num_input(DEFS_C, "InpRiskT2Pct")
 T3 = num_input(DEFS_C, "InpRiskT3Pct")
 T4 = num_input(DEFS_C, "InpRiskT4Pct")
 
-check("T1 RiskPercent is 0.5 (halved from 1.0)", T1 == 0.5, T1)
-check("T2 InpRiskT2Pct is 0.5 (halved from 1.0)", T2 == 0.5, T2)
-check("T3 InpRiskT3Pct is 0.25 (halved from 0.5)", T3 == 0.25, T3)
-check("T4 InpRiskT4Pct is 0.125 (halved from 0.25)", T4 == 0.125, T4)
+check("T1 RiskPercent is 1.0 (restored from v5.68's 0.5)", T1 == 1.0, T1)
+check("T2 InpRiskT2Pct is still 0.5 (not restored with T1)", T2 == 0.5, T2)
+check("T3 InpRiskT3Pct is still 0.25 (untouched since v5.68)", T3 == 0.25, T3)
+check("T4 InpRiskT4Pct is still 0.125 (untouched since v5.68)", T4 == 0.125, T4)
 
 if None not in (T1, T2, T3, T4):
-    check("the ladder SHAPE survived the halving (T1 == T2 > T3 > T4)",
-          T1 == T2 and T2 > T3 and T3 > T4, (T1, T2, T3, T4))
-    check("each rung below T2 is exactly HALF the one above it",
-          abs(T2 / 2.0 - T3) < 1e-12 and abs(T3 / 2.0 - T4) < 1e-12,
-          (T2, T3, T4))
+    # The v5.61 flat head (T1 == T2) is deliberately GONE. Asserted as a strict
+    # inequality so a future edit that re-flattens the ladder reds here.
+    check("the head is no longer FLAT (T1 > T2, flat-head shape retired)",
+          T1 > T2, (T1, T2))
+    check("the ladder descends strictly (T1 > T2 > T3 > T4)",
+          T1 > T2 > T3 > T4, (T1, T2, T3, T4))
+    check("EVERY rung is exactly HALF the one above it (geometric cascade)",
+          abs(T1 / 2.0 - T2) < 1e-12 and abs(T2 / 2.0 - T3) < 1e-12
+          and abs(T3 / 2.0 - T4) < 1e-12, (T1, T2, T3, T4))
     total = T1 + T2 + T3 + T4
-    check("the summed stacked exposure halved too (2.75 -> 1.375)",
-          abs(total - 1.375) < 1e-12, total)
+    check("the summed stacked exposure is 1.875 (was 1.375 in v5.68)",
+          abs(total - 1.875) < 1e-12, total)
     check("no rung rounded to zero or went negative",
           min(T1, T2, T3, T4) > 0.0, min(T1, T2, T3, T4))
 else:
-    for n in ("the ladder SHAPE survived the halving (T1 == T2 > T3 > T4)",
-              "each rung below T2 is exactly HALF the one above it",
-              "the summed stacked exposure halved too (2.75 -> 1.375)",
+    for n in ("the head is no longer FLAT (T1 > T2, flat-head shape retired)",
+              "the ladder descends strictly (T1 > T2 > T3 > T4)",
+              "EVERY rung is exactly HALF the one above it (geometric cascade)",
+              "the summed stacked exposure is 1.875 (was 1.375 in v5.68)",
               "no rung rounded to zero or went negative"):
         check(n, False, (T1, T2, T3, T4))
 
@@ -151,30 +169,40 @@ check("still no dead InpRiskT1Pct input",
 
 
 # ----------------------------------------------------------------------
-# 2. SafetyMaxRiskPct was deliberately NOT halved with the ladder.
+# 2. The prop-firm safety group is GONE, and the auditor ceiling follows T1.
 # ----------------------------------------------------------------------
-print("\n-- 2. The per-leg budget stayed where it was --")
+print("\n-- 2. Prop-firm safety group deleted; auditor ceiling derived --")
 
-BUDGET = num_input(DEFS_C, "SafetyMaxRiskPct")
+# v5.69 deletes the three prop-firm inputs outright rather than keeping them as
+# no-ops, because nothing in the tree ever read them. Absence -- not a value --
+# is the assertion, so the probe reds if any of them is re-declared.
+for gone in ("SafetyMaxRiskPct", "SafetyDailyDDLimit", "SafetyTotalDDLimit"):
+    check("%s is deleted from the inputs, not merely unused" % gone,
+          num_input(DEFS_C, gone) is None)
+check("the prop-firm group header is deleted",
+      "PROP FIRM SAFETY BUFFERS" not in strip_comments(DEFS_T))
 
-check("SafetyMaxRiskPct is still 1.5 (an escape hatch, not a tuned budget)",
-      BUDGET == 1.5, BUDGET)
-if None not in (T1, T2, BUDGET):
-    # The peak SINGLE leg on this ladder is T1/T2. Halving that leg does not
-    # halve the budget, so the headroom GROWS -- which is the safe direction.
-    check("the peak leg still sits inside the per-leg budget",
-          max(T1, T2) < BUDGET, "%s < %s" % (max(T1, T2), BUDGET))
-    # Pinned so a future retune cannot quietly close the gap to nothing.
-    check("the per-leg headroom widened (0.5% peak vs 1.5% budget = 3x)",
-          abs(BUDGET / max(T1, T2) - 3.0) < 1e-12, BUDGET / max(T1, T2))
+# The per-leg budget the dead input pretended to own is enforced at runtime and
+# DERIVED from RiskPercent, so it tracks T1 automatically (1.0 * 1.5 = 1.5%).
+check("the auditor still derives its ceiling from RiskPercent at runtime",
+      re.search(r"RiskPercent\s*\*\s*1\.50", AUD_C) is not None)
+check("the auditor does NOT read the deleted input",
+      "SafetyMaxRiskPct" not in AUD_C)
+if None not in (T1, T2):
+    CEILING = T1 * 1.50
+    check("the derived ceiling brackets the peak single leg (1.5%% vs %.3f%%)"
+          % max(T1, T2), max(T1, T2) < CEILING,
+          "%s < %s" % (max(T1, T2), CEILING))
 
-check("the halving is documented in the inputs, so it is not a silent edit",
-      "1.375" in DEFS_T and "HALVED from 1.0%" in DEFS_T)
+check("the new ladder is documented in the inputs, so it is not a silent edit",
+      "1.875" in DEFS_T and "GEOMETRIC CASCADE" in DEFS_T)
+check("the retired flat-head rationale is gone from the live inputs",
+      "FLAT-HEAD pyramid" not in strip_comments(DEFS_T))
 
 
 
 # ----------------------------------------------------------------------
-# 3. The halving touches MONEY, never GEOMETRY.
+# 3. The ladder change touches MONEY, never GEOMETRY.
 # ----------------------------------------------------------------------
 print("\n-- 3. Risk % moves lots, never price levels --")
 
@@ -189,14 +217,14 @@ check("every ladder trigger is still an R-multiple input", not missing_r, missin
 
 if not missing_r:
     rr = dict((n, num_input(DEFS_C, n)) for n in R_INPUTS)
-    check("the triggers stay STRICTLY ASCENDING after the halving",
+    check("the triggers stay STRICTLY ASCENDING after the risk change",
           rr["InpPyramidT2RR"] < rr["InpPyramidT3RR"] < rr["InpPyramidT4RR"],
           rr)
     check("no R trigger is expressed as a fraction that a % edit could hit",
           all(v >= 0.5 for v in rr.values()), rr)
 
 # The "half-risk" rung inside the TradeManager is an R-TRAIL milestone, not a
-# % risk knob. It must NOT have been swept up in the halving.
+# % risk knob. It must NOT have been swept up in either risk edit.
 check("the trade manager's half-risk rung is an R milestone, not a % knob",
       "m_halfRiskTriggers" in TRADE_C)
 check("no % risk literal leaked into the trade manager",
@@ -204,15 +232,24 @@ check("no % risk literal leaked into the trade manager",
 
 
 # ----------------------------------------------------------------------
-# 4. The auditor's tolerance still brackets a halved baseline.
+# 4. The auditor's tolerance follows its OWN derived ceiling, not the
+#    deleted input, and the T1 change moved it back to 1.5%.
 # ----------------------------------------------------------------------
-print("\n-- 4. The auditor tolerance follows the new baseline --")
+print("\n-- 4. The auditor tolerance is derived, never a literal --")
 
 check("the auditor still derives its ceiling from RiskPercent at runtime",
       re.search(r"RiskPercent\s*\*\s*1\.50", AUD_C) is not None)
 check("the auditor ceiling was NOT hard-coded to a literal",
       re.search(r"RiskPercent\s*\*\s*1\.50", AUD_C) is not None and
       "0.75" not in AUD_C)
+# v5.69 deleted the whole drawdown layer from the auditor; only the per-leg
+# risk check survives, which is what keeps this ceiling meaningful.
+check("the auditor's drawdown machinery is gone",
+      "AuditDrawdown" not in AUD_C or
+      AUD_C.count("AuditDrawdown") == 1)   # one surviving tombstone comment
+check("the auditor no longer latches a daily or total DD breach",
+      "m_alertSent_DailyDDBreach" not in AUD_C.replace(
+          "// v5.69: the drawdown latches (m_alertSent_DailyDDBreach,", ""))
 
 
 # ----------------------------------------------------------------------
@@ -300,9 +337,9 @@ check("RiskPctTail() guards against an unusable equity value",
 
 
 # ----------------------------------------------------------------------
-# 7. The boot log makes the halving visible.
+# 7. The boot log makes the ladder visible.
 # ----------------------------------------------------------------------
-print("\n-- 7. Startup surfaces the new baseline --")
+print("\n-- 7. Startup surfaces the current ladder --")
 
 check("the init log names the risk % AND its dollar value",
       "on current equity)" in RISK_T)
@@ -310,6 +347,8 @@ check("the startup banner names the risk % and its dollar value",
       "% dynamic equity" in MAIN_T and "AccountInfoDouble(ACCOUNT_EQUITY)" in MAIN_T)
 check("the startup banner prints the full ladder",
       "Ladder: T1 " in MAIN_T and "InpRiskT3Pct" in MAIN_T)
+check("the startup banner no longer prints a DD budget it does not enforce",
+      "DailyDD" not in MAIN_T and "TotalDD" not in MAIN_T)
 check("the risk manager header no longer claims a flat 1% model",
       "Strict 1% dynamic-equity model" not in RISK_T)
 
@@ -326,12 +365,16 @@ check("the sizer still ABORTS below broker min rather than clamping up",
 check("the shared overshoot factor is untouched",
       re.search(r"OTTO_RISK_OVERSHOOT_MULT", DEFS_T) is not None)
 
+# The superseded sums must not survive in any LIVE code. 2.75% was the v5.67
+# total and 1.375% the v5.68 total; both are quoted in comments as history,
+# which is why the scan strips comments first.
 STALE = []
 for f in ALL_FILES:
     body = strip_comments(read(os.path.join(ROOT, f)))
-    if "2.75" in body:
+    if "2.75" in body or "1.375" in body:
         STALE.append(f)
-check("no source still asserts 2.75% as the ladder sum", not STALE, STALE)
+check("no live code still asserts a retired ladder sum (2.75 / 1.375)",
+      not STALE, STALE)
 
 
 # ----------------------------------------------------------------------
@@ -357,7 +400,7 @@ def main():
     passed = sum(1 for _, ok, _ in RESULTS if ok)
     total = len(RESULTS)
     print("=" * 74)
-    print("v5.68 HALVED RISK BASELINE + FULL BLOCK GEOMETRY - STATIC PROBE")
+    print("v5.69 GEOMETRIC RISK CASCADE + FULL BLOCK GEOMETRY - STATIC PROBE")
     print("=" * 74)
     for name, ok, detail in RESULTS:
         mark = "PASS" if ok else "FAIL"

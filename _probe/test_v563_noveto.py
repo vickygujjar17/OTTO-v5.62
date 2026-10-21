@@ -249,8 +249,16 @@ def main():
           "IsInNewsBlackout" not in MAIN_C)
     check("OnTick no longer refreshes vector state",
           "RefreshVectorState" not in MAIN_C)
-    check("OnTick still gates placement on the daily-DD pause",
-          "if(!g_dailyDD_Paused)" in MAIN_C)
+    # v5.69 INVERTED: this assertion used to require that placement was still
+    # gated on the daily-DD pause. That pause -- and the whole prop-firm
+    # drawdown layer above it -- is deleted, so the surviving invariant is the
+    # OPPOSITE: no drawdown state may gate placement at all. Same treatment as
+    # the v5.67 HiveMind inversion below: the check is flipped rather than
+    # removed, so a future reintroduction of a DD gate reds here.
+    check("OnTick no longer gates placement on a daily-DD pause",
+          "g_dailyDD_Paused" not in MAIN_C)
+    check("OnTick no longer gates placement on a total-DD halt",
+          "g_totalDD_Halted" not in MAIN_C)
     check("OnTick still runs the block funnel and order placement",
           "g_blockManager.Update(g_marketDay)" in MAIN_C and
           "g_orderManager.PlaceOrdersForArmedBlocks()" in MAIN_C)

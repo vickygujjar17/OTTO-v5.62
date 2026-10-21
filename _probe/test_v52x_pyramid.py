@@ -97,38 +97,49 @@ check("T1 risk input RiskPercent exists", T1_RISK is not None)
 check("T2 risk input InpRiskT2Pct exists", T2_RISK is not None)
 check("T3 risk input InpRiskT3Pct exists", T3_RISK is not None)
 check("T4 risk input InpRiskT4Pct exists", T4_RISK is not None)
-check("RiskPercent (T1) defaults to 0.5 (v5.68 halved)", T1_RISK == 0.5, T1_RISK)
+check("RiskPercent (T1) defaults to 1.0 (v5.69 restored)", T1_RISK == 1.0, T1_RISK)
 check("InpRiskT2Pct defaults to 0.5 (v5.68 halved)", T2_RISK == 0.5, T2_RISK)
 check("InpRiskT3Pct defaults to 0.25 (v5.68 halved)", T3_RISK == 0.25, T3_RISK)
 check("InpRiskT4Pct defaults to 0.125 (v5.68 halved)", T4_RISK == 0.125, T4_RISK)
 check("no dead InpRiskT1Pct input was re-introduced",
       not re.search(r"^\s*input\s+double\s+InpRiskT1Pct", DEFS_T, re.M))
 
-# The rungs after T2 must shrink: each scale-in risks less than the one above.
+# The rungs must shrink: each scale-in risks strictly less than the one above.
+# v5.69 dropped the flat head (T1 == T2 in v5.61..v5.68), so the ladder is now a
+# strict geometric cascade -- asserted as strict inequality, not >=.
 RISKS = [T1_RISK, T2_RISK, T3_RISK, T4_RISK]
 if all(r is not None for r in RISKS):
-    check("risk ladder is non-increasing after T2 (T1 >= T2 > T3 > T4)",
-          RISKS[0] >= RISKS[1] > RISKS[2] > RISKS[3], RISKS)
+    check("risk ladder is strictly descending (T1 > T2 > T3 > T4)",
+          RISKS[0] > RISKS[1] > RISKS[2] > RISKS[3], RISKS)
+    check("each rung is exactly half the one above it (geometric cascade)",
+          abs(RISKS[0] / 2.0 - RISKS[1]) < 1e-12 and
+          abs(RISKS[1] / 2.0 - RISKS[2]) < 1e-12 and
+          abs(RISKS[2] / 2.0 - RISKS[3]) < 1e-12, RISKS)
     total = sum(RISKS)
-    check("ladder total risk is 1.375%", abs(total - 1.375) < 1e-12, total)
+    check("ladder total risk is 1.875%", abs(total - 1.875) < 1e-12, total)
+    # v5.69 deleted SafetyMaxRiskPct: the per-leg abort ceiling is no longer an
+    # input but a runtime derivation, maxAllowedRiskPct = RiskPercent * 1.50 in
+    # CHighTableAuditor::AuditRiskExposure(). It tracks peakRiskPct -- the worst
+    # SINGLE leg, from its own entry to the shared basket SL -- and never the
+    # basket sum. Pin that the ceiling still brackets the peak leg via that
+    # derivation rather than via a now-absent input.
     budget = num_input(DEFS_T, "SafetyMaxRiskPct")
-    # v5.61: SafetyMaxRiskPct is a PER-LEG abort threshold, not a summed-ladder
-    # cap. AuditRiskExposure() tracks peakRiskPct -- the worst single leg, from
-    # its own entry to the shared basket SL -- and never the basket sum, so the
-    # check is re-scoped to match what the runtime actually enforces. On this
-    # ladder the peak leg is T1/T2 at 0.5%, safely inside the 1.5% budget.
-    check("every rung stays inside the SafetyMaxRiskPct per-leg budget",
-          budget is not None and max(RISKS) < budget,
-          "%s < %s" % (max(RISKS), budget))
+    check("SafetyMaxRiskPct is deleted (the ceiling is derived, not an input)",
+          budget is None, budget)
+    check("every rung stays inside the DERIVED per-leg ceiling (RiskPercent*1.50)",
+          max(RISKS) < RISKS[0] * 1.50,
+          "%s < %s" % (max(RISKS), RISKS[0] * 1.50))
     # ...while the SUMMED stacked exposure is deliberate and pinned explicitly,
     # so a future retune cannot quietly drift the total without a red probe.
-    check("summed stacked exposure is documented as intended (1.375%, not a cap breach)",
-          abs(total - 1.375) < 1e-12, total)
+    check("summed stacked exposure is documented as intended (1.875%, not a cap breach)",
+          abs(total - 1.875) < 1e-12, total)
 else:
-    check("risk ladder is non-increasing after T2 (T1 >= T2 > T3 > T4)", False, RISKS)
-    check("ladder total risk is 1.375%", False, RISKS)
-    check("every rung stays inside the SafetyMaxRiskPct per-leg budget", False, RISKS)
-    check("summed stacked exposure is documented as intended (1.375%, not a cap breach)",
+    check("risk ladder is strictly descending (T1 > T2 > T3 > T4)", False, RISKS)
+    check("each rung is exactly half the one above it (geometric cascade)", False, RISKS)
+    check("ladder total risk is 1.875%", False, RISKS)
+    check("SafetyMaxRiskPct is deleted (the ceiling is derived, not an input)", False, RISKS)
+    check("every rung stays inside the DERIVED per-leg ceiling (RiskPercent*1.50)", False, RISKS)
+    check("summed stacked exposure is documented as intended (1.875%, not a cap breach)",
           False, RISKS)
 
 
@@ -469,7 +480,7 @@ check("the [4] group banner names 4-tranche pyramiding",
 check("the pyramid group banner no longer says 3 tranches",
       "3-tranche pyramiding" not in DEFS_T)
 check("the ladder total is documented in the inputs",
-      "1.375" in DEFS_T)
+      "1.875" in DEFS_T)
 check("the MILESTONE LADDER documents the +2.0R rung",
       re.search(r"\+2\.0R\s+lock rung 2", DEFS_T) is not None)
 check("InpLockProfit2RR and InpLockProfit2TargetRR are both declared",

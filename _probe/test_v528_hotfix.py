@@ -257,33 +257,29 @@ check("rollover always within the preceding 24h (sweep)", not bad,
 # ----------------------------------------------------------------------
 print("\n-- Daily reset source contract --")
 
-for fn in ("IsUsEasternDST", "NewYorkUtcOffsetSeconds", "UtcToNewYork",
-           "MostRecentNyRollover"):
-    check("otto.mq5 defines %s()" % fn,
-          re.search(r"\b%s\s*\(" % fn, MAIN_T) is not None)
-
-check("CheckDailyReset uses TimeGMT()", "TimeGMT()" in MAIN_T)
-check("CheckDailyReset uses MostRecentNyRollover()",
-      re.search(r"MostRecentNyRollover\s*\(", MAIN_T) is not None)
-
 cdr = func_body(MAIN_T, r"void\s+CheckDailyReset\s*\(void\)")
-check("CheckDailyReset body located", cdr is not None)
-if cdr is not None:
-    body = strip_comments(cdr)
-    check("CheckDailyReset no longer calls iTime()", "iTime(" not in body)
-    check("CheckDailyReset no longer calls PERIOD_D1", "PERIOD_D1" not in body)
-    check("CheckDailyReset keeps the 0-boundary guard",
-          re.search(r"boundary\s*==\s*0", body) is not None)
-    check("CheckDailyReset still clears the daily pause",
-          "g_dailyDD_Paused = false" in body)
-    check("CheckDailyReset still persists state", "PersistSafetyState()" in body)
-    check("CheckDailyReset does NOT clear the 5% halt",
-          "g_totalDD_Halted = false" not in body)
+# v5.69 INVERTED: CheckDailyReset() and the whole 00:00-anchor clock it served
+# are DELETED with the prop-firm drawdown layer, so the surviving contract is
+# the absence of the function and of every helper that fed it. Written as an
+# inversion rather than a deletion so a future reintroduction of a reset clock
+# reds here instead of sliding past.
+check("CheckDailyReset is deleted (v5.69 removed the drawdown layer)",
+      cdr is None)
+for fn in ("IsUsEasternDST", "NewYorkUtcOffsetSeconds", "UtcToNewYork",
+           "MostRecentNyRollover", "MostRecentServerMidnight"):
+    check("otto.mq5 no longer defines %s()" % fn,
+          re.search(r"\b%s\s*\(" % fn, strip_comments(MAIN_T)) is None)
+check("no reset clock consults TimeGMT() for a drawdown anchor",
+      "TimeGMT()" not in MAIN_T)
+check("the retired daily-pause latch is gone",
+      "g_dailyDD_Paused" not in strip_comments(MAIN_T))
+check("the retired persistence helper is gone",
+      "PersistSafetyState" not in strip_comments(MAIN_T))
 
 check("OnInit no longer derives the anchor from a D1 bar",
       "datetime todayBar" not in MAIN_T)
-check("OnInit logs the time basis for VPS verification",
-      "Time basis:" in MAIN_T)
+check("OnInit no longer logs a time basis it does not compute",
+      "Time basis:" not in MAIN_T)
 
 md = func_body(MAIN_T, r"void\s+UpdateMarketDay\s*\(void\)")
 check("UpdateMarketDay still uses the D1 bar (unrelated to the DD anchor)",
@@ -291,41 +287,41 @@ check("UpdateMarketDay still uses the D1 bar (unrelated to the DD anchor)",
 
 
 # ----------------------------------------------------------------------
-# 4. Source: 1% floating rule is a live float, without a halt latch
+# 4. Source: the 1% floating rule and its halt latch are BOTH deleted
 # ----------------------------------------------------------------------
-print("\n-- 1% floating-loss source contract --")
+print("\n-- 1% floating-loss contract (v5.69: rule deleted) --")
 
 flt = re.search(
     r"double\s+floatingLoss\s*=\s*\(balance\s*>\s*0\s*&&\s*equity\s*<\s*balance\)"
     r"\s*\?\s*100\.0\s*\*\s*\(balance\s*-\s*equity\)\s*/\s*balance\s*:\s*0\.0\s*;",
     MAIN_T)
-check("floatingLoss is (balance - equity) / balance", flt is not None)
-check("OnTick reads ACCOUNT_BALANCE", "ACCOUNT_BALANCE" in MAIN_T)
+# v5.69 INVERTED: the 1%% floating-loss rule, its SafetyMaxFloatingLoss input and
+# the balance/equity delta it read were part of the drawdown layer and are
+# deleted. The surviving invariant is that none of them can come back, so each
+# assertion below demands ABSENCE. (Several of these were ALREADY red before
+# v5.69: this script had drifted from the source it claims to pin, so the
+# inversion also brings it back in line.)
+check("the 1%% floating-loss local is deleted", flt is None)
+check("no live code reads SafetyMaxFloatingLoss",
+      "SafetyMaxFloatingLoss" not in strip_comments(MAIN_T))
+check("the 1%% floating branch is deleted",
+      re.search(r"if\s*\(\s*floatingLoss\s*>=.*?//\s*3%%\s*Max\s+Daily\s+Drawdown",
+                MAIN_T, re.S) is None)
+check("no DD halt latch survives anywhere in OnTick",
+      "g_totalDD_Halted" not in strip_comments(MAIN_T))
 
-b1 = re.search(r"if\s*\(floatingLoss\s*>=\s*SafetyMaxFloatingLoss\).*?"
-               r"(?=//\s*3%\s*Max\s+Daily\s+Drawdown)", MAIN_T, re.S)
-check("1% floating branch located", b1 is not None)
-check("floatingLoss no longer reads g_equityHighWaterMark",
-      bool(b1) and "g_equityHighWaterMark - equity" not in b1.group(0))
-if b1:
-    seg = b1.group(0)
-    check("1% branch no longer sets g_totalDD_Halted", "g_totalDD_Halted = true" not in seg)
-    check("1% branch no longer persists a Halted flag",
-          'OttoGvStoreFlag("Halted"' not in seg)
-    check("1% branch still cancels pendings", "CancelAllPendingOrders()" in seg)
-    check("1% branch still closes the basket", "CloseEntireBasket(" in seg)
-    check("1% branch still returns for this tick", re.search(r"\breturn\s*;", seg) is not None)
+# The persist/restore pair the probe used to require no longer exists at all:
+# nothing is written to or read from the terminal GlobalVariable store.
+check("no Halted flag is persisted anywhere",
+      'OttoGvStoreFlag("Halted"' not in MAIN_T)
+check("no Halted flag is restored on init",
+      'OttoGvLoadFlag("Halted"' not in MAIN_T)
+check("the GlobalVariable helpers are deleted",
+      "OttoGvName" not in strip_comments(MAIN_T))
 
-check("Halted key is still persisted somewhere", 'OttoGvStoreFlag("Halted"' in MAIN_T)
-check("Halted key is still restored on init", 'OttoGvLoadFlag("Halted"' in MAIN_T)
+b5 = re.search(r"if\s*\(\s*totalDD\s*>=\s*SafetyTotalDDLimit\s*\)", MAIN_T)
+check("the 5%% trailing bridge is deleted", b5 is None)
 
-b5 = re.search(r"if\s*\(totalDD\s*>=\s*SafetyTotalDDLimit\)", MAIN_T)
-check("5% trailing branch still present", b5 is not None)
-if b5:
-    tail = MAIN_T[b5.start():b5.start() + 1400]
-    check("5% trailing branch still hard-halts", "g_totalDD_Halted = true" in tail)
-    check("5% trailing branch still persists the halt",
-          'OttoGvStoreFlag("Halted", true)' in tail)
 
 
 # ----------------------------------------------------------------------
