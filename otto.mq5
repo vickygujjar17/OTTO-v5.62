@@ -1,11 +1,11 @@
 //+------------------------------------------------------------------+
 //|                                                       OttoEA.mq5 |
 //|                    OTTO — Goat Funded Trader (GFT) Master Build    |
-//|                    Pine Script Master Build Port (v5.71)            |
+//|                    Pine Script Master Build Port (v5.72)            |
 //|                                    Institutional / Real-Money    |
 //+------------------------------------------------------------------+
 #property copyright "OTTO EA - Goat Funded Trader (GFT) Master Build"
-#property version   "5.71"
+#property version   "5.72"
 #property description "OTTO EA â€” Goat Funded Trader (GFT) Master Build"
 #property description "Structural vetoes only: Separation | Sizing | Broken | Flipped"
 #property description "Modules: Risk | Block Manager | Order Mgmt | Trail"
@@ -103,7 +103,7 @@ int OnInit(void)
    g_symbol = _Symbol;
 
    Print("==============================================================");
-   Print("  OTTO EA v5.71 — 28-Pair Institutional Master Build — INITIALIZING");
+   Print("  OTTO EA v5.72 — 28-Pair Institutional Master Build — INITIALIZING");
    Print("  Symbol: ", g_symbol, " | Magic: ", MagicNumber);
    Print("==============================================================");
 

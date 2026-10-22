@@ -4,7 +4,7 @@
 //|              OTTO EA — exact Pine v4.70 execution port           |
 //+------------------------------------------------------------------+
 #property copyright "OTTO EA - Goat Funded Trader (GFT) Master Build"
-#property version   "5.71"
+#property version   "5.72"
 
 #ifndef __OTTO_ORDER_MANAGER__
 #define __OTTO_ORDER_MANAGER__
@@ -61,8 +61,14 @@ private:
    // --- Virtual Order Engine (v5.37 Part 1) ---------------------------
    // Armed setups are held in memory and executed as MARKET orders when price
    // crosses the continuation level, bypassing broker pending-price rules.
-   // v5.52 makes this the ORDINARY path: the FRONT-EDGE continuation entry is
-   // a breakout (STOP-style), which a broker limit cannot legitimately rest.
+   // v5.52 made this the ORDINARY path for the FRONT-EDGE continuation entry,
+   // which is a breakout (STOP-style) a broker limit cannot legitimately rest.
+   // v5.72 -- THAT IS NO LONGER THE DEFAULT. InpEntryStyle now ships MIDPOINT,
+   // whose entry sits behind the market at arm time, so the ordinary path is a
+   // PHYSICAL resting limit (ROUTE A, caught by CheckPendingOrderFills) and this
+   // virtual engine is the FALLBACK -- used when price has already run through
+   // the entry or the venue refuses a resting send. It returns to being the
+   // primary route only when ENTRY_FRONT_EDGE is explicitly selected.
    struct SVirtualOrder
      {
       int                  blockIndex;
@@ -899,6 +905,14 @@ private:
       // at arm time, so a setup the market has ALREADY traded through is
       // stale: the breakout this geometry was waiting for happened without
       // this order, and the only fill left is a chase at market.
+      //
+      // v5.72 -- with MIDPOINT as the shipped default, ROUTE A is no longer
+      // dormant. The centre sits behind the market, so priceValid is TRUE for
+      // the ordinary setup and the block rests as a PHYSICAL broker limit that
+      // CheckPendingOrderFills() resolves. ROUTE B (below) is now the fallback:
+      // reached when price has already run through the centre, or when the venue
+      // refuses a resting send. The front-edge reasoning in this block still
+      // applies verbatim whenever ENTRY_FRONT_EDGE is selected.
       //
       // TWO scoping conditions, both load-bearing:
       //

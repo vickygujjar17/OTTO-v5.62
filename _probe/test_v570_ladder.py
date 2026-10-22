@@ -359,6 +359,11 @@ check("the armed record prints the Trade Entry Point",
       "Trade Entry Point : " in ARM)
 check("the armed record still explains the entry formula",
       "Near-Edge Pullback entry: near edge +/- (blockHeight + 1.0*ATR)" in ARM)
+# v5.72 -- the formula is now picked from InpEntryStyle inside LogSetupArmed, so
+# the MIDPOINT wording must live in the same method body.
+check("the armed record explains the MIDPOINT formula the default build prints",
+      "Midpoint entry: (top + bottom) / 2.0 - exact zone centre" in ARM and
+      "InpEntryStyle == ENTRY_MIDPOINT" in ARM)
 check("the armed record prints the Initial SL with its 1R",
       "Initial SL        : " in ARM and "1R = " in ARM)
 

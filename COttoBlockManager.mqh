@@ -4,7 +4,7 @@
 //|              OTTO EA — exact Pine v4.70 block logic port          |
 //+------------------------------------------------------------------+
 #property copyright "OTTO EA - Goat Funded Trader (GFT) Master Build"
-#property version   "5.71"
+#property version   "5.72"
 
 #ifndef __OTTO_BLOCK_MANAGER__
 #define __OTTO_BLOCK_MANAGER__
@@ -133,6 +133,21 @@ private:
    //+------------------------------------------------------------------+
    //| BlockEntryPrice — Pine entry price for a block, honouring        |
    //| InpEntryStyle.                                                   |
+   // v5.72 -- THE SHIPPED DEFAULT IS NOW ENTRY_MIDPOINT, which returns the block
+   // centre and ignores ATR entirely:
+   //   LONG and SHORT: b.midpoint = (b.top + b.bottom) / 2.0
+   // It is direction-independent by construction -- one value, no branch -- which
+   // is the whole point: the centre of a zone does not depend on which way the
+   // continuation is traded. Because the centre sits BEHIND the market once price
+   // has closed clear of the near edge, the entry is on the limit side and the
+   // router rests a real BUY_LIMIT/SELL_LIMIT instead of arming a virtual cross.
+   // The stop is still entry -/+ slDist (slDist untouched at blockHeight +
+   // 0.5*ATR), so for a LONG it lands at bottom - blockHeight/2 - 0.5*ATR --
+   // OUTSIDE the zone on the safe side. Risk per unit is unchanged.
+   //
+   // The geometry below documents ENTRY_FRONT_EDGE, which remains SELECTABLE
+   // (it is the v5.64-v5.71 shipping behaviour, not dead code).
+   //
    // NEAR-EDGE PULLBACK (v5.64). The entry offset is measured from the NEAR
    // edge -- the zone boundary the market is ALREADY clear of -- and is one
    // full (blockHeight + 1.0*ATR) beyond it:

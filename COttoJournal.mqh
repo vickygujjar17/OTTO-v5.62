@@ -4,7 +4,7 @@
 //|            OTTO EA — dynamic file editing, cancellation, email       |
 //+------------------------------------------------------------------+
 #property copyright "OTTO EA - Goat Funded Trader (GFT) Master Build"
-#property version   "5.71"
+#property version   "5.72"
 
 #ifndef __OTTO_JOURNAL__
 #define __OTTO_JOURNAL__
@@ -53,6 +53,23 @@ private:
    //| COMPARABLE with every journal printed before v5.64 -- it is    |
    //| operator context, never an exit level, and no code path       |
    //| trades off it.                                                |
+   //|                                                              |
+   //| v5.72 -- STILL the far-edge anchor, now measured from a     |
+   //| MIDPOINT entry by default. The printed target price is        |
+   //| UNCHANGED (it never depended on the entry), but the realized  |
+   //| multiple an operator infers from it shifts sign of drift:     |
+   //|                                                              |
+   //|   R = InpMaxRR + blockHeight / (2 * rrUnit)                  |
+   //|                                                              |
+   //| because the entry now sits half a block-height NEARER than    |
+   //| the far edge instead of 1.0*ATR BEYOND it (4.25 on a          |
+   //| 1.0-high zone at ATR 2.0, where front-edge read 3.00). The    |
+   //| row is left on the far edge on purpose: it is the one anchor  |
+   //| that is style-independent, so the same journal row remains    |
+   //| comparable across the v5.64/v5.72 switch. Do NOT "fix" this   |
+   //| by re-anchoring on the entry -- that would make the printed   |
+   //| target move whenever the default style changes, which is      |
+   //| exactly the cross-release comparability this anchor buys.     |
    //+--------------------------------------------------------------+
    double            ProjectedTarget(const SSniperBlock &blk, ENUM_TRADE_DIRECTION dir)
      {
@@ -240,11 +257,32 @@ public:
       W("  Setup ID          : " + tradeId);
       W("  Logic             : " + phase);
       W("  Execution Mode    : " + execMode);
-      W("  Trade Entry Point : " + FmtPrice(entryPrice) + " (Near-Edge Pullback entry: near edge +/- (blockHeight + 1.0*ATR))");
+      // v5.72: the entry formula is STYLE-DEPENDENT. These two strings used to
+      // hardcode the near-edge pullback arithmetic, which silently became a lie
+      // the moment InpEntryStyle moved to Midpoint -- the record would have
+      // printed "near edge +/- (blockHeight + 1.0*ATR)" beside a price that was
+      // actually the zone centre. The formula is now selected from the SAME
+      // input the entry maths reads, so the journal and the order cannot
+      // disagree. `execMode` above is already dynamic (PHYSICAL vs VIRTUAL),
+      // which is what made the fixed wording the odd one out.
+      bool   isMidpoint = (InpEntryStyle == ENTRY_MIDPOINT);
+      string entryFormula = isMidpoint
+         ? "(Midpoint entry: (top + bottom) / 2.0 - exact zone centre)"
+         : "(Near-Edge Pullback entry: near edge +/- (blockHeight + 1.0*ATR))";
+      W("  Trade Entry Point : " + FmtPrice(entryPrice) + " " + entryFormula);
       W("  Initial SL        : " + FmtPrice(slPrice) + " | 1R = " + FmtPrice(blk.rrUnit));
       W("  Volume            : " + DoubleToString(lotSize,2));
       string actionDesc = "";
-      if(btype == BLOCK_SUPPORT)
+      if(isMidpoint)
+        {
+         // The centre is a PULLBACK: price returns INTO the zone from the near
+         // side, so the order rests as a limit at the midpoint.
+         if(btype == BLOCK_SUPPORT)
+            actionDesc = "SUPPORT (Midpoint Pullback / Sell at (top + bottom) / 2.0 | SL 1R back)";
+         else
+            actionDesc = "RESISTANCE (Midpoint Pullback / Buy at (top + bottom) / 2.0 | SL 1R back)";
+        }
+      else if(btype == BLOCK_SUPPORT)
          actionDesc = "SUPPORT (Continuation Breakdown / Sell at Near Edge - blockHeight - 1.0*ATR | SL 1R back)";
       else
          actionDesc = "RESISTANCE (Continuation Breakout / Buy at Near Edge + blockHeight + 1.0*ATR | SL 1R back)";

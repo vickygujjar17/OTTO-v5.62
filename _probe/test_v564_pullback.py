@@ -341,6 +341,11 @@ check("the journal no longer describes the retired 0.5*ATR edges",
       "SL at Bottom Edge" not in JRN_RAW)
 check("the journal trigger row names the Near-Edge Pullback entry",
       "Near-Edge Pullback entry: near edge +/- (blockHeight + 1.0*ATR)" in JRN_RAW)
+# v5.72 -- the label is style-selected; the midpoint wording is what the shipped
+# default prints, and it must coexist with the retained front-edge wording.
+check("the journal trigger row names the MIDPOINT entry the default build prints",
+      "Midpoint entry: (top + bottom) / 2.0 - exact zone centre" in JRN_RAW and
+      "Midpoint Pullback / Buy at (top + bottom) / 2.0 | SL 1R back" in JRN_RAW)
 check("no source still describes an 'extreme front-run' entry",
       "EXTREME FRONT-RUNNING ANTICIPATION" not in OM_RAW and
       "EXTREME FRONT-RUNNING ANTICIPATION" not in BM_RAW and

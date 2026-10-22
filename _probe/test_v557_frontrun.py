@@ -492,8 +492,14 @@ print("\n-- 8. Configuration --")
 check("ENTRY_FRONT_EDGE is declared as the near-edge pullback style (v5.64)",
       "ENTRY_FRONT_EDGE" in DEFS_T and
       "NEAR-EDGE PULLBACK (v5.64)" in DEFS_T)
-check("InpEntryStyle defaults to the front-edge entry",
-      "InpEntryStyle = ENTRY_FRONT_EDGE" in DEFS_T)
+# v5.72 -- the DEFAULT flipped to the block midpoint. The front-edge entry is
+# still declared and still selectable, so the assertion is now two-sided: the
+# new default is midpoint AND the old style was retained rather than deleted.
+check("InpEntryStyle defaults to the MIDPOINT entry (v5.72, was FRONT_EDGE)",
+      "InpEntryStyle = ENTRY_MIDPOINT" in DEFS_T and
+      "InpEntryStyle = ENTRY_FRONT_EDGE" not in DEFS_T)
+check("the front-edge style is RETAINED as a selectable style, not deleted",
+      "ENTRY_FRONT_EDGE = 1" in DEFS_T)
 check("the OrderManager maps that style to the front-edge entry",
       "if(InpEntryStyle == ENTRY_MIDPOINT)" in (OM_CALC or "") and
       "if(InpEntryStyle == ENTRY_MIDPOINT)" in (BM_BEP or ""))
@@ -559,6 +565,12 @@ print("\n-- 10. Journal & wick geometry sync --")
 check("the journal names the CONTINUATION geometry, not the veto wording",
       "Continuation Breakdown / Sell at Near Edge - blockHeight - 1.0*ATR | SL 1R back" in JRN_RAW and
       "Continuation Breakout / Buy at Near Edge + blockHeight + 1.0*ATR | SL 1R back" in JRN_RAW)
+# v5.72 -- the journal label is now chosen from InpEntryStyle, so BOTH geometries
+# must be present in the source. The midpoint strings are the ones the DEFAULT
+# build actually prints; the front-edge pair survives for the selectable style.
+check("the journal names the MIDPOINT geometry the default build prints",
+      "Midpoint Pullback / Sell at (top + bottom) / 2.0 | SL 1R back" in JRN_RAW and
+      "Midpoint Pullback / Buy at (top + bottom) / 2.0 | SL 1R back" in JRN_RAW)
 check("the retired v5.58 'Top Edge / Bottom Edge' wording is gone",
       "Buy at Top Edge + 0.5*ATR" not in JRN_RAW and
       "Sell at Bottom Edge - 0.5*ATR" not in JRN_RAW and
@@ -567,6 +579,11 @@ check("the retired v5.58 'Top Edge / Bottom Edge' wording is gone",
 check("the journal trigger-price row names the Near-Edge Pullback entry",
       "Near-Edge Pullback entry: near edge +/- (blockHeight + 1.0*ATR)" in JRN_RAW and
       "Front-Edge entry: far edge +/- 0.5*ATR" not in JRN_RAW)
+# v5.72 -- the row is style-selected, so the MIDPOINT wording must also exist and
+# must be the one the shipped default prints.
+check("the journal trigger-price row names the MIDPOINT entry as the default",
+      "Midpoint entry: (top + bottom) / 2.0 - exact zone centre" in JRN_RAW and
+      "InpEntryStyle == ENTRY_MIDPOINT" in JRN_RAW)
 check("the retired 'Aggressive' block wording is gone",
       "Aggressive" not in JRN_RAW)
 

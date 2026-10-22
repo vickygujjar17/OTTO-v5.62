@@ -1,7 +1,7 @@
 # OTTO EA
 
 MetaTrader 5 Expert Advisor — MQL5 port of the Pine Script `prop_guard_tester.pine`
-master build. **Current base: v5.71**
+master build. **Current base: v5.72**
 
 > **Primary timeframe: `PERIOD_H1`** (`InpPrimaryTF`, moved from `PERIOD_M15`
 > in v5.71). Pivot detection, block formation and the ATR handle all read the
@@ -41,6 +41,47 @@ them go the Front-Run, Stale 45D, Near-Miss 6D, Momentum and FVG vetoes. What
 survives is the structural funnel only: **Separation, Sizing, Broken, Flipped**.
 Their `input` declarations remain as labelled no-ops so existing `.set` files
 still load.
+
+### Changed in v5.72 — default entry style moved to the block midpoint
+
+**`InpEntryStyle` now defaults to `ENTRY_MIDPOINT`** (was `ENTRY_FRONT_EDGE`).
+Entries fill at the **exact centre of the zone**, `(top + bottom) / 2.0`, instead
+of at the near-edge pullback offset. `ENTRY_FRONT_EDGE` is **retained and fully
+functional** — select it to restore v5.64–v5.71 behaviour.
+
+This is a **premise inversion, not a cosmetic default**, and the previous
+backtests do not describe this build:
+
+| | Front-edge (v5.64–v5.71) | Midpoint (v5.72 default) |
+|---|---|---|
+| Entry | near edge ± `(blockHeight + 1.0·ATR)` = far edge ± `1.0·ATR` | `(top + bottom) / 2.0` |
+| Trade bought | a **breakout** beyond the zone | a **pullback** into the zone |
+| Order route | virtual cross (price must travel to reach it) | **physical resting limit** (ROUTE A) |
+| `slDist` (1R) | `blockHeight + 0.5·ATR` | **unchanged** |
+| Stop placement (LONG) | `bottom + 0.5·ATR` — inside the zone | `bottom − blockHeight/2 − 0.5·ATR` — **outside**, safe side |
+| Risk per unit | — | **identical** |
+
+**What is unchanged:** `CalcSLDistance()` stays `blockHeight + 0.5·ATR` and is
+still decoupled from the entry, so position sizing is bit-for-bit what v5.71
+sized. The stop is still `entry ∓ slDist`. The crossing guard keeps its
+`InpEntryStyle != ENTRY_MIDPOINT` scope — without it, a centre-behind-market
+entry would read as "already crossed" on the first healthy tick and retire every
+midpoint setup.
+
+**ROUTE A wakes from dormancy.** Because the midpoint sits *behind* the market
+once price has closed clear of the near edge, setups now rest as real
+`BUY_LIMIT`/`SELL_LIMIT` orders resolved by `CheckPendingOrderFills()`. That path
+has been unreachable since v5.64 and — although structurally audited (volume
+bounds, optimistic lock, journal save/restore, fallback to virtual) — it **needs
+a Strategy Tester run**; static probes cannot prove it fills.
+
+**Journal labels are now style-aware.** The armed record previously hardcoded the
+near-edge formula in every entry, which would have printed a formula the order did
+not use. It now selects its wording from `InpEntryStyle`.
+
+> ⚠️ **A `.set` file pinning `InpEntryStyle=1` silently overrides this default**
+> and keeps the front-edge entry. Check your saved presets before running.
+
 
 ### Changed in v5.71 — default primary timeframe moved to 1 hour (`PERIOD_H1`)
 

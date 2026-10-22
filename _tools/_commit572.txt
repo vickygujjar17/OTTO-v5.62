@@ -1,0 +1,96 @@
+572: default entry style moved to the block midpoint (ENTRY_MIDPOINT)
+
+InpEntryStyle now defaults to ENTRY_MIDPOINT instead of ENTRY_FRONT_EDGE.
+Entries fill at the exact centre of the zone, (top + bottom) / 2.0, rather
+than at the near-edge pullback offset. ENTRY_FRONT_EDGE is retained and
+fully functional: select it to restore v5.64-v5.71 behaviour.
+
+This is a premise inversion, not a cosmetic default, and the distinction is
+the whole point of the release. The two styles are inverse premises about
+what a zone is for:
+
+  * FRONT_EDGE bought a BREAKOUT. The entry sat a full 1.0*ATR BEYOND the
+    far edge, so the market still had to travel to reach it, and the trigger
+    was a STOP-style cross fired from the virtual engine.
+  * MIDPOINT buys a PULLBACK to the centre. The entry sits INSIDE the zone,
+    i.e. BEHIND the market once price has closed clear of the near edge, so
+    it is a genuine resting limit the router can place.
+
+Same slDist, same R multiples, same position sizing -- different trade
+population. Backtests of any pre-v5.72 build do not describe this one.
+
+WHAT WAS NOT TOUCHED, and why that matters more than what was:
+
+  * CalcSLDistance stays blockHeight + 0.5*ATR. Coupling it to the new entry
+    would silently change position size, which is the one number that must be
+    independent of entry geometry.
+  * The stop is still entry -/+ slDist. Only the anchor moved, so risk per
+    unit is bit-for-bit what v5.71 risked. For a LONG the stop now lands at
+    bottom - blockHeight/2 - 0.5*ATR, i.e. OUTSIDE the zone on the safe side.
+    It was FRONT-EDGE that parked its stop inside the zone (bottom + 0.5*ATR).
+  * The crossing guard keeps its `InpEntryStyle != ENTRY_MIDPOINT` scope. This
+    is the load-bearing exemption: a centre-behind-market entry trips
+    IsEntryCrossed() on the first healthy tick, so un-scoping the guard would
+    retire EVERY midpoint setup while every other probe still passed.
+  * The far-edge ProjectedTarget anchor stays. It is the only style-independent
+    anchor, so journal rows remain comparable across the switch. Do not
+    "fix" it by re-anchoring on the entry.
+
+ROUTE A WAKES FROM DORMANCY -- the part static analysis cannot certify.
+
+Because the midpoint sits behind the market once price has closed clear of the
+near edge, priceValid is true for the ordinary setup and blocks now rest as
+real BUY_LIMIT/SELL_LIMIT orders resolved by CheckPendingOrderFills(). That
+path has been unreachable since v5.64, when COttoOrderManager noted the virtual
+cross was "the ONLY reachable path" for the front-edge style and left ROUTE A
+"to ENTRY_MIDPOINT setups" -- which nothing selected.
+
+It is structurally audited (volume bounds, optimistic lock, journal
+save/restore, fallback to virtual on rejection, live wiring at the
+CheckPendingOrderFills call site) but it is UNEXERCISED IN PRACTICE. A
+Strategy Tester run is required before this default is trusted with capital;
+static probes cannot substitute for it.
+
+JOURNAL LABELS WERE LYING BY CONSTRUCTION.
+
+COttoJournal hardcoded the front-edge formula in every armed record --
+"Trade Entry Point : <price> (Near-Edge Pullback entry: near edge +/-
+(blockHeight + 1.0*ATR))" -- plus the same arithmetic in both actionDesc
+strings. Under a midpoint default that prints a formula the order did not
+use. execMode was already dynamic (PHYSICAL vs VIRTUAL), which is what made
+the fixed wording the odd one out. Both strings now select on InpEntryStyle,
+read from the same input the entry maths reads, so journal and order cannot
+disagree. No plumbing was needed: COttoJournal already includes
+OttoDefines.mqh and already reads InpMaxRR.
+
+FILES
+
+  OttoDefines.mqh          default flip + enum rationale + operator warning
+  COttoBlockManager.mqh    BlockEntryPrice header: midpoint primary,
+                           front-edge geometry kept as the selectable style
+  COttoOrderManager.mqh    "virtual is ORDINARY" corrected to fallback;
+                           ROUTE A marked primary for the midpoint default
+  COttoJournal.mqh         style-aware entry formula + actionDesc;
+                           far-edge anchor rationale extended for v5.72
+
+GATES
+
+  build_check.ps1        0 errors, 0 warnings (headers verified from staging)
+  probe suite            30/33 files green. The 3 red are PRE-EXISTING and
+                         untouched by this release: test_v531_smart_trim,
+                         test_v532_hightable, test_v543_session.
+  test_v572_midpoint     29/29
+  normalize_eol.py       9 files, 0 rewritten (CRLF preserved)
+  verify_integrity.py    green post-commit (compares against HEAD)
+
+OPERATOR WARNING
+
+A .set file pinning InpEntryStyle=1 silently overrides the new default and
+keeps the front-edge entry. Check saved presets before running: the input is
+still accepted, so nothing will warn you.
+
+  README.md                "Changed in v5.72" section with the comparison table
+  _probe/test_v557_frontrun.py   default + journal assertions pin BOTH styles
+  _probe/test_v564_pullback.py   journal assertion accepts the midpoint branch
+  _probe/test_v570_ladder.py     armed-record assertion accepts both branches
+  _probe/test_v572_midpoint.py   NEW: 29 checks over the flip
